@@ -3,58 +3,36 @@ import os
 import time
 import uuid
 from io import BytesIO
-
+from pympler import asizeof
 import numpy as np
 import chess
 import matplotlib.pyplot as plt
-import chess.svg
-import cairosvg
+# import cairosvg
+from stockfish import Stockfish
+from pympler import asizeof
 
-
-def process_board(board):
-    board = board.board_fen().split("/")
-    board = ["0" * int(y) if y.isnumeric() else y for x in board for y in x]
-    board = [item for sublist in board for item in sublist]
-    return np.array(board).reshape(8, 8)
-
+stockfish = Stockfish(path=r"C:\Users\Mateu\Desktop\stockfish.exe")
+stockfish.set_turn_perspective(True)
+t = time.time()
+print(stockfish.get_perft(1))
+print(time.time() - t)
 
 board = chess.Board()
-board.push_san("e4")
-board_svg = chess.svg.board(board=board)
-
-
-def show_board(board):
-    img_path = str(uuid.uuid4())
-
-    with open(img_path, "wb") as img_file:
-        img_file.write(board_svg.encode("utf-8"))
-
-    img_data = cairosvg.svg2png(url=img_path)
-    img = plt.imread(BytesIO(img_data))
-    plt.imshow(img)
-    plt.axis("off")
-    plt.show()
-    os.remove(img_path)
-
-
-for move in board.legal_moves:
-    print(move.uci())
-    tmp = copy.deepcopy(board)
-    tmp.push(move)
-    # show_board(tmp)
-    print(tmp, end="\n\n")
-
-# print(board)
-exit()
-
+t = time.time()
+print(list(board.legal_moves))
+print(time.time() - t)
 
 class Node:
-    def __init__(self, board):
+    def __init__(self, board: str, move: str, parent: "Node" = None):
+        if parent is not None:
+            stockfish.set_fen_position(board)
+            stockfish.make_moves_from_current_position([move])
+
         self.visits = 0
-        self.board = board
+        self.board = stockfish.get_fen_position()
+        self.legal_moves = stockfish.get_perft(1)[1].keys()
         self.children = []
-        self.parent = None
-        self.result = None
+        self.parent = parent
         self.evaluation = self.get_evaluation()
 
     def is_terminal(self):
@@ -62,43 +40,24 @@ class Node:
         return len(self.children) == 0
 
     def is_fully_expanded(self):
-        return len(self.children) == len(self.board.legal_moves)
+        return len(self.children) == len(self.legal_moves)
 
     def get_untried_actions(self):
         actions = []
-        for move in self.board.legal_moves:
-            tmp = copy.copy(self.board)
-            tmp.push_san(move.uci())
-            actions.append(Node(None, tmp))
+        for move in self.legal_moves:
+            actions.append(Node(self.board, move, self))
         return actions
 
     def get_evaluation(self):
-        if self.board.is_checkmate():
-            return -1000
-        if self.board.is_stalemate():
-            return 0
+        eval = stockfish.get_static_eval()
 
-        evaluation = 0
-        mapper = {
-            "P": 1,
-            "N": 3,
-            "B": 3,
-            "R": 5,
-            "Q": 9,
-            "K": 50,
-            "p": -1,
-            "n": -3,
-            "b": -3,
-            "r": -5,
-            "q": -9,
-            "k": -50,
-        }
+        if eval is None:
+            if len(self.legal_moves) == 0:
+                return -9999
+            else:
+                eval = self.parent.evaluation
 
-        for x in self.board.board_fen():
-            if x in mapper:
-                evaluation += mapper[x]
-        return evaluation
-
+        return eval
 
 class MTST:
     def __init__(self, root, budget):
@@ -109,8 +68,8 @@ class MTST:
     def run(self):
         for iter in range(self.budget):
             node = self.tree_policy(self.root)
-            result = self.default_policy(node)
-            self.backpropagate(node, result)
+            evaluation = self.default_policy(node)
+            self.backpropagate(node, evaluation)
         return self.best_child(self.root)
 
     def tree_policy(self, node):
@@ -122,7 +81,7 @@ class MTST:
         return node
 
     def expand(self, node):
-        untried_actions = node.get_untried_actions()
+        untried_actions = node.legal_moves
         random_child = np.random.choice(untried_actions)
         return node.children.append(random_child)
 
@@ -134,12 +93,22 @@ class MTST:
         while not node.is_terminal():
             a = np.random.choice(node.get_untried_actions())
             node = node.children.append(a)
-        return node.result
+        return node.evaluation
 
-    def backpropagate(self, node, result):
+    def backpropagate(self, node, evaluation):
         while node is not None:
-            node.result = result
+            node.evaluation = evaluation
             node = node.parent
 
     def UCT(self, node):
-        return node.evaluation / node.visits + self.c + np.sqrt(np.log(node.parent.visits) / node.visits)
+        return (
+                node.evaluation / node.visits
+                + self.c
+                + np.sqrt(np.log(node.parent.visits) / node.visits)
+        )
+
+
+stockfish = Stockfish(path=r"C:\Users\Mateu\Desktop\stockfish.exe")
+
+search_tree = MTST(Node(stockfish.get_fen_position(), "", None), 5)
+search_tree.run()
