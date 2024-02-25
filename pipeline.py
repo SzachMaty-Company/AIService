@@ -20,9 +20,9 @@ if __name__ == "__main__":
         net.share_memory()
         net.eval()
         print("hi")
-        current_net_filename = os.path.join("./model_data/", net_to_play)
+        current_net_filename = os.path.join("model_data/", net_to_play)
         checkpoint = torch.load(current_net_filename)
-        net.load_state_dict(checkpoint['state_dict'])
+        net.load_state_dict(checkpoint["state_dict"])
         processes1 = []
         for i in range(1):
             p1 = mp.Process(target=MCTS_self_play, args=(net, 50, i))
@@ -32,25 +32,25 @@ if __name__ == "__main__":
             p1.join()
 
         # Runs Net training
-        net_to_train = "current_net_trained8_iter1.pth.tar";
+        net_to_train = "current_net_trained8_iter1.pth.tar"
         save_as = "current_net_trained8_iter1.pth.tar"
         # gather data
-        data_path = "./datasets/iter0/"
+        data_path = "datasets/iter0/"
         datasets = []
         for idx, file in enumerate(os.listdir(data_path)):
             filename = os.path.join(data_path, file)
-            with open(filename, 'rb+') as fo:
-                datasets.extend(pickle.load(fo, encoding='bytes'))
-        data_path = "./datasets/iter1/"
+            with open(filename, "rb+") as fo:
+                datasets.extend(pickle.load(fo, encoding="bytes"))
+        data_path = "datasets/iter1/"
         for idx, file in enumerate(os.listdir(data_path)):
             filename = os.path.join(data_path, file)
-            with open(filename, 'rb+') as fo:
-                datasets.extend(pickle.load(fo, encoding='bytes'))
-        data_path = "./datasets/iter2/"
+            with open(filename, "rb+") as fo:
+                datasets.extend(pickle.load(fo, encoding="bytes"))
+        data_path = "datasets/iter2/"
         for idx, file in enumerate(os.listdir(data_path)):
             filename = os.path.join(data_path, file)
-            with open(filename, 'rb+') as fo:
-                datasets.extend(pickle.load(fo, encoding='bytes'))
+            with open(filename, "rb+") as fo:
+                datasets.extend(pickle.load(fo, encoding="bytes"))
         datasets = np.array(datasets)
 
         mp.set_start_method("spawn", force=True)
@@ -61,10 +61,9 @@ if __name__ == "__main__":
         net.share_memory()
         net.train()
         print("hi")
-        current_net_filename = os.path.join("./model_data/", \
-                                            net_to_train)
+        current_net_filename = os.path.join("model_data/", net_to_train)
         checkpoint = torch.load(current_net_filename)
-        net.load_state_dict(checkpoint['state_dict'])
+        net.load_state_dict(checkpoint["state_dict"])
 
         processes2 = []
         for i in range(6):
@@ -74,5 +73,4 @@ if __name__ == "__main__":
         for p2 in processes2:
             p2.join()
         # save results
-        torch.save({'state_dict': net.state_dict()}, os.path.join("./model_data/", \
-                                                                  save_as))
+        torch.save({"state_dict": net.state_dict()}, os.path.join("model_data/", save_as))

@@ -1,48 +1,58 @@
-#!/usr/bin/env python
-
+import chess
 import numpy as np
 
 
 def encode_board(board):
-    board_state = board.current_board;
-    encoded = np.zeros([8, 8, 22]).astype(int)
-    encoder_dict = {"R": 0, "N": 1, "B": 2, "Q": 3, "K": 4, "P": 5, "r": 6, "n": 7, "b": 8, "q": 9, "k": 10, "p": 11}
-    for i in range(8):
-        for j in range(8):
-            if board_state[i, j] != " ":
-                encoded[i, j, encoder_dict[board_state[i, j]]] = 1
-    if board.player == 1:
-        encoded[:, :, 12] = 1  # player to move
-    if board.K_move_count != 0:
-        encoded[:, :, 13] = 1  # cannot castle queenside for white
-        encoded[:, :, 14] = 1  # cannot castle kingside for white
-    if board.K_move_count == 0 and board.R1_move_count != 0:
-        encoded[:, :, 13] = 1
-    if board.K_move_count == 0 and board.R2_move_count != 0:
-        encoded[:, :, 14] = 1
-    if board.k_move_count != 0:
-        encoded[:, :, 15] = 1  # cannot castle queenside for black
-        encoded[:, :, 16] = 1  # cannot castle kingside for black
-    if board.k_move_count == 0 and board.r1_move_count != 0:
-        encoded[:, :, 15] = 1
-    if board.k_move_count == 0 and board.r2_move_count != 0:
-        encoded[:, :, 16] = 1
-    encoded[:, :, 17] = board.move_count
-    encoded[:, :, 18] = board.repetitions_w
-    encoded[:, :, 19] = board.repetitions_b
-    encoded[:, :, 20] = board.no_progress_count
-    encoded[:, :, 21] = board.en_passant
+    encoded = np.zeros([64, 19]).astype(int)
+    encoder_dict = {
+        "R": 0,
+        "N": 1,
+        "B": 2,
+        "Q": 3,
+        "K": 4,
+        "P": 5,
+        "r": 6,
+        "n": 7,
+        "b": 8,
+        "q": 9,
+        "k": 10,
+        "p": 11,
+    }
+    for square in chess.SQUARES_180:
+        piece = board.piece_at(square)
+
+        if piece:
+            encoded[63-square, encoder_dict[piece.symbol()]] = 1
+
+    encoded = encoded.reshape(8, 8, 19)
+
+    encoded[:, :, 12] = int(board.turn)
+    encoded[:, :, 13] = board.has_queenside_castling_rights(chess.WHITE)
+    encoded[:, :, 14] = board.has_kingside_castling_rights(chess.WHITE)
+    encoded[:, :, 15] = board.has_queenside_castling_rights(chess.BLACK)
+    encoded[:, :, 16] = board.has_kingside_castling_rights(chess.BLACK)
+    encoded[:, :, 17] = board.fullmove_number
+
+    # print("\n".join(str(board).split("\n")[::-1]))
+
+    if board.ep_square:
+        square = 63-board.ep_square
+        encoded[square//8,square%8,18] = 1
+
     return encoded
 
 
 def encode_action(board, initial_pos, final_pos, underpromote=None):
     encoded = np.zeros([8, 8, 73]).astype(int)
-    i, j = initial_pos;
-    x, y = final_pos;
+    i, j = initial_pos
+    x, y = final_pos
     dx, dy = x - i, y - j
-    piece = board.current_board[i, j]
-    if piece in ["R", "B", "Q", "K", "P", "r", "b", "q", "k", "p"] and underpromote in [None,
-                                                                                        "queen"]:  # queen-like moves
+    piece = board.piece_at(chess.Square(i * 8 + j)).symbol()
+
+    if piece in ["R", "B", "Q", "K", "P", "r", "b", "q", "k", "p"] and underpromote in [
+        None,
+        "queen",
+    ]:  # queen-like moves
         if dx != 0 and dy == 0:  # north-south idx 0-13
             if dx < 0:
                 idx = 7 + dx
@@ -80,7 +90,7 @@ def encode_action(board, initial_pos, final_pos, underpromote=None):
             idx = 62
         elif (x, y) == (i + 1, j + 2):
             idx = 63
-    if piece in ["p", "P"] and (x == 0 or x == 7) and underpromote != None:  # underpromotions
+    if piece in ["p", "P"] and (x == 0 or x == 7) and underpromote is not None:  # underpromotions
         if abs(dx) == 1 and dy == 0:
             if underpromote == "rook":
                 idx = 64
@@ -103,19 +113,20 @@ def encode_action(board, initial_pos, final_pos, underpromote=None):
             if underpromote == "bishop":
                 idx = 72
     encoded[i, j, idx] = 1
-    encoded = encoded.reshape(-1);
+    encoded = encoded.reshape(-1)
     encoded = np.where(encoded == 1)[0][0]  # index of action
     return encoded
 
 
 def decode_action(board, encoded):
-    encoded_a = np.zeros([4672]);
-    encoded_a[encoded] = 1;
+    encoded_a = np.zeros([4672])
+    encoded_a[encoded] = 1
     encoded_a = encoded_a.reshape(8, 8, 73)
-    a, b, c = np.where(encoded_a == 1);  # i,j,k = i[0],j[0],k[0]
+    a, b, c = np.where(encoded_a == 1)  # i,j,k = i[0],j[0],k[0]
     i_pos, f_pos, prom = [], [], []
     for pos in zip(a, b, c):
         i, j, k = pos
+
         initial_pos = (i, j)
         promoted = None
         if 0 <= k <= 13:
@@ -165,74 +176,78 @@ def decode_action(board, encoded):
                 final_pos = (i + 1, j + 2)
         else:
             if k == 64:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j)
                     promoted = "R"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j)
                     promoted = "r"
             if k == 65:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j)
                     promoted = "N"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j)
                     promoted = "n"
             if k == 66:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j)
                     promoted = "B"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j)
                     promoted = "b"
             if k == 67:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j - 1)
                     promoted = "R"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j - 1)
                     promoted = "r"
             if k == 68:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j - 1)
                     promoted = "N"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j - 1)
                     promoted = "n"
             if k == 69:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j - 1)
                     promoted = "B"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j - 1)
                     promoted = "b"
             if k == 70:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j + 1)
                     promoted = "R"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j + 1)
                     promoted = "r"
             if k == 71:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j + 1)
                     promoted = "N"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j + 1)
                     promoted = "n"
             if k == 72:
-                if board.player == 0:
+                if board.turn == 0:
                     final_pos = (i - 1, j + 1)
                     promoted = "B"
-                if board.player == 1:
+                else:
                     final_pos = (i + 1, j + 1)
                     promoted = "b"
-        if board.current_board[i, j] in ["P", "p"] and final_pos[0] in [0,
-                                                                        7] and promoted == None:  # auto-queen promotion for pawn
-            if board.player == 0:
+        if (
+            board.piece_at(chess.Square(i * 8 + j)).symbol() in ["P", "p"]
+            and final_pos[0] in [0, 7]
+            and promoted is None
+        ):  # auto-queen promotion for pawn
+            if board.turn == 0:
                 promoted = "Q"
             else:
                 promoted = "q"
-        i_pos.append(initial_pos);
+
+        i_pos.append(initial_pos)
         f_pos.append(final_pos), prom.append(promoted)
     return i_pos, f_pos, prom
