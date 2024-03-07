@@ -12,7 +12,10 @@ import torch.multiprocessing as mp
 from alpha_net import ChessNet
 import datetime
 import time
+from stockfish import Stockfish
+import math
 
+fish = Stockfish(r"C:\Users\Mateu\Desktop\stockfish.exe",depth=7, parameters={"Threads": 4, "Hash": 2048})
 # https://github.com/geochri/AlphaZero_Chess
 
 
@@ -103,7 +106,7 @@ class UCTNode:
         for i in range(len(child_priors)):  # mask all illegal actions
             if i not in action_idxs:
                 c_p[i] = 0.0000000000
-        if self.parent.parent is None:  # add dirichlet noise to child_priors in root node
+        if self.parent.parent is None:  # add dirichlet noise to child_priors in root node TODO TODO tODO
             c_p = self.add_dirichlet_noise(action_idxs, c_p)
         self.child_priors = c_p
 
@@ -127,13 +130,20 @@ class UCTNode:
         return self.children[move]
 
     def backup(self, value_estimate: float):
-        current = self
+        if value_estimate == 0:
+            value_estimate = 0.0000000001
+
+        self.total_value = value_estimate
+        self.number_visits += 1
+        print("chuj")
+        current = self.parent
         while current.parent is not None:
             current.number_visits += 1
             if current.game.turn:
-                current.total_value += 1 * value_estimate
+                current.total_value = np.max(self.child_total_value[self.child_total_value != 0])
             else:
-                current.total_value += -1 * value_estimate
+                current.total_value = np.min(self.child_total_value[self.child_total_value != 0])
+            print(current.game,current.total_value,current.child_total_value[current.child_total_value != 0])
             current = current.parent
 
 
@@ -154,7 +164,22 @@ def UCT_search(game_state, num_reads, net):
         child_priors, value_estimate = net(encoded_s)
         child_priors = child_priors.detach().cpu().numpy().reshape(-1)
         value_estimate = value_estimate.item()
-
+        fish.set_fen_position(leaf.game.fen())
+        eval = fish.get_evaluation()
+        if eval["type"] == "cp":
+            value = eval["value"]
+            if value > 0:
+                eval = min(value / 5000, 1)
+            elif value < 0:
+                eval = max(value / 5000, -1)
+            else:
+                eval = 0
+        elif eval["type"] == "mate":
+            if eval["value"] > 0:
+                eval = 1
+            else:
+                eval = -1
+        value_estimate = eval
         if leaf.game.is_checkmate():
             leaf.backup(value_estimate)
             continue
@@ -199,12 +224,11 @@ def load_pickle(filename):
 
 def MCTS_self_play(chessnet, num_games, cpu):
     for idxx in range(0, num_games):
-        current_board = chess.Board("rnbqkbnr/ppppp1pp/8/8/8/8/B7/K4Q2 w - - 0 1")
-        checkmate = False
+        current_board = chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1")
         dataset = []  # to get state, policy, value for neural network training
         states = []
         value = 0
-        while checkmate is False and current_board.fullmove_number <= 100:
+        while current_board.fullmove_number <= 100:
             draw_counter = 0
             for s in states:
                 if np.array_equal(current_board.board_fen(), s):
@@ -215,31 +239,56 @@ def MCTS_self_play(chessnet, num_games, cpu):
             board_state = copy.deepcopy(ed.encode_board(current_board))
             t = time.time()
             best_move, root = UCT_search(current_board, 40, chessnet)
+            print(root.child_total_value[root.child_total_value != 0])
             print("time: ", time.time() - t)
             current_board = do_decode_n_move_pieces(
                 current_board, best_move
             )
             policy = get_policy(root)
-            dataset.append([board_state, policy])
+            # dataset.append([board_state, policy])
+            fish.set_fen_position(current_board.fen())
+            eval = fish.get_evaluation()
+
+            if eval["type"] == "cp":
+                value = eval["value"]
+                if value > 0:
+                    eval = min(value/5000, 1)
+                elif value < 0:
+                    eval = max(value/5000, -1)
+                else:
+                    eval = 0
+            elif eval["type"] == "mate":
+                if eval["value"] > 0:
+                    eval = 1
+                else:
+                    eval = -1
+            print(eval, board_state[1,1,12], current_board.fen())
+            dataset.append([board_state, policy, eval])
             print(current_board, current_board.fullmove_number)
             print(" ")
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins
                     value = -1
+                    print("Black wins")
                 else:  # white wins
                     value = 1
-                checkmate = True
-
-        dataset_p = []
-        for idx, data in enumerate(dataset):
-            s, p = data
-            if idx == 0:
-                dataset_p.append([s, p, 0])
+                    print("White wins")
+                break
             else:
-                dataset_p.append([s, p, value])
+                value = 0
+
+        # dataset_p = []
+        # for idx, data in enumerate(dataset):
+        #     s, p = data
+        #     if idx == 0:
+        #         dataset_p.append([s, p, 0])
+        #     else:
+        #         dataset_p.append([s, p, value])
+        dataset_p = [x for x in dataset]
         del dataset
+        print("dataset_cpu%i_%i_%s_%i" % (cpu, idxx, datetime.datetime.now().strftime("%Y-%m-%d_%H:%M"), value))
         save_as_pickle(
-            "dataset_cpu%i_%i_%s" % (cpu, idxx, datetime.datetime.today().strftime("%Y-%m-%d")),
+            "dataset_cpu%i_%i_%s_%i" % (cpu, idxx, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"), value),
             dataset_p,
         )
 
