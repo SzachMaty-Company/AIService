@@ -1,149 +1,103 @@
-import pickle
-import os
 import collections
-
-import chess
-import numpy as np
-import math
-import encoder_decoder as ed
 import copy
-import torch
-import torch.multiprocessing as mp
-from alpha_net import ChessNet
-import datetime
-import time
-from stockfish import Stockfish
 import math
+import random
+import time
 
-fish = Stockfish(r"C:\Users\Mateu\Desktop\stockfish.exe",depth=7, parameters={"Threads": 4, "Hash": 2048})
-# https://github.com/geochri/AlphaZero_Chess
+import chess_board as chess
+import numpy as np
+
+
+class CustomBoard(chess.Board):
+    pass
+np.seterr(divide='ignore')
 
 
 class UCTNode:
-    def __init__(self, game, move, parent=None):
-        self.game = game  # state s
-        self.move = move  # action index
+    def __init__(self, board, move, move_index,parent=None, depth=0):
+        self.board = board
+        self.move_index = move_index
+        self.child_move_index = 0
+        self.move = move
+        self.legal_moves = board.generate_legal_moves()
         self.is_expanded = False
         self.parent = parent
-        self.children = {}
-        self.child_priors = np.zeros([4672], dtype=np.float32)
-        self.child_total_value = np.zeros([4672], dtype=np.float32)
-        self.child_number_visits = np.zeros([4672], dtype=np.float32)
-        self.action_idxes = []
-
+        self.children = [None]*200
+        self.child_total_value = np.zeros([200], dtype=np.float32)
+        self.child_number_visits = np.repeat(0.000001, 200)
+        self.depth = depth
     @property
     def number_visits(self):
-        return self.parent.child_number_visits[self.move]
+        return self.parent.child_number_visits[self.move_index]
 
     @number_visits.setter
     def number_visits(self, value):
-        self.parent.child_number_visits[self.move] = value
+        self.parent.child_number_visits[self.move_index] = value
 
     @property
     def total_value(self):
-        return self.parent.child_total_value[self.move]
+        return self.parent.child_total_value[self.move_index]
 
     @total_value.setter
     def total_value(self, value):
-        self.parent.child_total_value[self.move] = value
+        self.parent.child_total_value[self.move_index] = value
 
     def child_Q(self):
-        return self.child_total_value / (1 + self.child_number_visits)
+        return self.child_total_value / self.child_number_visits
+
+    def get_most_visited(self) -> tuple:
+        most_visited_index = np.argmax(self.child_number_visits)
+
+        return self.children[most_visited_index].move
 
     def child_U(self):
-        return math.sqrt(self.number_visits) * (
-                abs(self.child_priors) / (1 + self.child_number_visits)
-        )
+        return np.sqrt(np.log(self.number_visits) / (1+self.child_number_visits))# or 0.0000001))
 
-    def best_child(self):
-        if self.action_idxes != []:
-            bestmove = self.child_Q() + self.child_U()
-            return self.action_idxes[np.argmax(bestmove[self.action_idxes])]
+    def value(self, root_color):
+        return (self.child_Q() )* (1 if self.board.turn != root_color else -1) + 1.5 * self.child_U()
 
-        return np.argmax(self.child_Q() + self.child_U())
+    def best_child(self, root_color):
+        best = None
 
-    def select_leaf(self):
+        best_index = np.argmax(self.child_Q() + 1.5*self.child_U())
+        best = self.children[best_index]
+
+        return best
+
+    def select_leaf(self, root_color):
         current = self
         while current.is_expanded:
-            best_move = current.best_child()
-            current = current.maybe_add_child(best_move)
+            best = current.best_child(root_color)
+            if best:
+                current = best
+            else:
+                break
         return current
 
-    def add_dirichlet_noise(self, action_idxs, child_priors):
-        valid_child_priors = child_priors[
-            action_idxs
-        ]  # select only legal moves entries in child_priors array
-        valid_child_priors = 0.75 * valid_child_priors + 0.25 * np.random.dirichlet(
-            np.zeros([len(valid_child_priors)], dtype=np.float32) + 0.3
-        )
-        child_priors[action_idxs] = valid_child_priors
-        return child_priors
+    def expand(self):
+        # print(*self.legal_moves)
+        try:
+            move = next(self.legal_moves)
+            copy_board = self.board.copy(stack=False)
+            copy_board.push(move)
+            self.children[self.child_move_index] = UCTNode(copy_board, move, self.child_move_index,parent=self, depth=self.depth + 1)
+            self.child_move_index += 1
+        except StopIteration:
+            self.is_expanded = True
 
-    def expand(self, child_priors):
-        self.is_expanded = True
-        action_idxs = []
-        c_p = child_priors
-        y = list(self.game.generate_legal_moves())
-        y = [(x.from_square, x.to_square, x.promotion) for x in y]
-        y = [
-            [
-                (from_square // 8, from_square % 8),
-                (to_square // 8, to_square % 8),
-                {5: None, 4: "rook", 3: "bishop", 2: "knight", None: None}[promotion],
-            ]
-            for (from_square, to_square, promotion) in y
-        ]
-
-        for action in y:
-            if action != []:
-                initial_pos, final_pos, underpromote = action
-                action_idxs.append(
-                    ed.encode_action(self.game, initial_pos, final_pos, underpromote)
-                )
-        if not action_idxs:
-            self.is_expanded = False
-        self.action_idxes = action_idxs
-        for i in range(len(child_priors)):  # mask all illegal actions
-            if i not in action_idxs:
-                c_p[i] = 0.0000000000
-        if self.parent.parent is None:  # add dirichlet noise to child_priors in root node TODO TODO tODO
-            c_p = self.add_dirichlet_noise(action_idxs, c_p)
-        self.child_priors = c_p
-
-    def decode_n_move_pieces(self, board, move):
-        i_pos, f_pos, prom = ed.decode_action(board, move)
-        for i, f, p in zip(i_pos, f_pos, prom):
-            letters = "abcdefgh"
-            a, b = i
-            c, d = f
-            move_string = letters[b] + str(a + 1) + letters[d] + str(c + 1)
-            if p is not None:
-                move_string += p.lower()
-            board.push_san(move_string)
-        return board
-
-    def maybe_add_child(self, move):
-        if move not in self.children:
-            copy_board = chess.Board(self.game.fen())
-            copy_board = self.decode_n_move_pieces(copy_board, move)
-            self.children[move] = UCTNode(copy_board, move, parent=self)
-        return self.children[move]
-
-    def backup(self, value_estimate: float):
-        if value_estimate == 0:
-            value_estimate = 0.0000000001
-
-        self.total_value = value_estimate
+    def backup(self, root_color):
         self.number_visits += 1
-        print("chuj")
+        self.total_value = eval(self.board, root_color)
+
         current = self.parent
         while current.parent is not None:
             current.number_visits += 1
-            if current.game.turn:
-                current.total_value = np.max(self.child_total_value[self.child_total_value != 0])
+
+            if current.board.turn == root_color:
+                current.total_value += np.sum(current.child_total_value)
             else:
-                current.total_value = np.min(self.child_total_value[self.child_total_value != 0])
-            print(current.game,current.total_value,current.child_total_value[current.child_total_value != 0])
+                current.total_value -= np.sum(current.child_total_value)
+
             current = current.parent
 
 
@@ -154,171 +108,190 @@ class DummyNode(object):
         self.child_number_visits = collections.defaultdict(float)
 
 
-def UCT_search(game_state, num_reads, net):
-    root = UCTNode(game_state, move=None, parent=DummyNode())
+def UCT_search(game_state, num_reads):
+    root = UCTNode(game_state,move_index=0 ,move=None, parent=DummyNode())
     for i in range(num_reads):
-        leaf = root.select_leaf()
-        encoded_s = ed.encode_board(leaf.game)
-        encoded_s = encoded_s.transpose(2, 0, 1)
-        encoded_s = torch.from_numpy(encoded_s).float()  # .cuda()
-        child_priors, value_estimate = net(encoded_s)
-        child_priors = child_priors.detach().cpu().numpy().reshape(-1)
-        value_estimate = value_estimate.item()
-        fish.set_fen_position(leaf.game.fen())
-        eval = fish.get_evaluation()
-        if eval["type"] == "cp":
-            value = eval["value"]
-            if value > 0:
-                eval = min(value / 5000, 1)
-            elif value < 0:
-                eval = max(value / 5000, -1)
+        leaf = root.select_leaf(root.board.turn)
+
+        if leaf.board.is_checkmate():
+            if leaf.board.turn == root.board.turn:
+                leaf.total_value = -10000
             else:
-                eval = 0
-        elif eval["type"] == "mate":
-            if eval["value"] > 0:
-                eval = 1
-            else:
-                eval = -1
-        value_estimate = eval
-        if leaf.game.is_checkmate():
-            leaf.backup(value_estimate)
-            continue
-        leaf.expand(child_priors)  # need to make sure valid moves
-        leaf.backup(value_estimate)
+                leaf.total_value = 10000
 
-    return np.argmax(root.child_number_visits), root
+        leaf.expand()
+        leaf.backup(root_color=root.board.turn)
+    print(root.child_total_value)
+    print(root.child_number_visits)
+    print("=====================================")
+    # while True:
+    #     print(root.child_total_value)
+    #     print(root.child_number_visits)
+    #     print(chess.Move(*root.children[root.get_most_visited()].move), root.children[root.get_most_visited()].move)
+    #     print("=====================================")
+    #     root = root.children[root.get_most_visited()]
 
-
-def do_decode_n_move_pieces(board, move):
-    i_pos, f_pos, prom = ed.decode_action(board, move)
-    for i, f, p in zip(i_pos, f_pos, prom):
-        letters = "abcdefgh"
-        a, b = i
-        c, d = f
-        move_string = letters[b] + str(a + 1) + letters[d] + str(c + 1)
-        if p is not None:
-            move_string += p.lower()
-        board.push_san(move_string)
-    return board
+    return root.get_most_visited()
 
 
-def get_policy(root):
-    policy = np.zeros([4672], dtype=np.float32)
-    for idx in np.where(root.child_number_visits != 0)[0]:
-        policy[idx] = root.child_number_visits[idx] / root.child_number_visits.sum()
-    return policy
+PAWN = 100
+KNIGHT = 320
+BISHOP = 330
+ROOK = 500
+QUEEN = 900
+KING = 20000
+PAWN_TABLE = [
+    0, 0, 0, 0, 0, 0, 0, 0,
+    50, 50, 50, 50, 50, 50, 50, 50,
+    10, 10, 20, 30, 30, 20, 10, 10,
+    5, 5, 10, 25, 25, 10, 5, 5,
+    0, 0, 0, 20, 20, 0, 0, 0,
+    5, -5, -10, 0, 0, -10, -5, 5,
+    5, 10, 10, -20, -20, 10, 10, 5,
+    0, 0, 0, 0, 0, 0, 0, 0
+]
+PAWN_TABLE_BLACK = PAWN_TABLE[::-1]
+KNIGHT_TABLE = [
+    -50, -40, -30, -30, -30, -30, -40, -50,
+    -40, -20, 0, 0, 0, 0, -20, -40,
+    -30, 0, 10, 15, 15, 10, 0, -30,
+    -30, 5, 15, 20, 20, 15, 5, -30,
+    -30, 0, 15, 20, 20, 15, 0, -30,
+    -30, 5, 10, 15, 15, 10, 5, -30,
+    -40, -20, 0, 5, 5, 0, -20, -40,
+    -50, -40, -30, -30, -30, -30, -40, -50
+]
+KNIGHT_TABLE_BLACK = KNIGHT_TABLE[::-1]
+BISHOP_TABLE = [
+    -20, -10, -10, -10, -10, -10, -10, -20,
+    -10, 0, 0, 0, 0, 0, 0, -10,
+    -10, 0, 5, 10, 10, 5, 0, -10,
+    -10, 5, 5, 10, 10, 5, 5, -10,
+    -10, 0, 10, 10, 10, 10, 0, -10,
+    -10, 10, 10, 10, 10, 10, 10, -10,
+    -10, 5, 0, 0, 0, 0, 5, -10,
+    -20, -10, -10, -10, -10, -10, -10, -20
+]
+BISHOP_TABLE_BLACK = BISHOP_TABLE[::-1]
+ROOK_TABLE = [
+    0, 0, 0, 0, 0, 0, 0, 0,
+    5, 10, 10, 10, 10, 10, 10, 5,
+    -5, 0, 0, 0, 0, 0, 0, -5,
+    -5, 0, 0, 0, 0, 0, 0, -5,
+    -5, 0, 0, 0, 0, 0, 0, -5,
+    -5, 0, 0, 0, 0, 0, 0, -5,
+    -5, 0, 0, 0, 0, 0, 0, -5,
+    0, 0, 0, 5, 5, 0, 0, 0
+]
+ROOK_TABLE_BLACK = ROOK_TABLE[::-1]
+QUEEN_TABLE = [
+    -20, -10, -10, -5, -5, -10, -10, -20,
+    -10, 0, 0, 0, 0, 0, 0, -10,
+    -10, 0, 5, 5, 5, 5, 0, -10,
+    -5, 0, 5, 5, 5, 5, 0, -5,
+    0, 0, 5, 5, 5, 5, 0, -5,
+    -10, 5, 5, 5, 5, 5, 0, -10,
+    -10, 0, 5, 0, 0, 0, 0, -10,
+    -20, -10, -10, -5, -5, -10, -10, -20
+]
+QUEEN_TABLE_BLACK = QUEEN_TABLE[::-1]
+KING_TABLE = [
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -30, -40, -40, -50, -50, -40, -40, -30,
+    -20, -30, -30, -40, -40, -30, -30, -20,
+    -10, -20, -20, -20, -20, -20, -20, -10,
+    20, 20, 0, 0, 0, 0, 20, 20,
+    20, 30, 10, 0, 0, 10, 30, 20
+]
+KING_TABLE_BLACK = KING_TABLE[::-1]
+KING_TABLE_END = [
+    -50, -40, -30, -20, -20, -30, -40, -50,
+    -30, -20, -10, 0, 0, -10, -20, -30,
+    -30, -10, 20, 30, 30, 20, -10, -30,
+    -30, -10, 30, 40, 40, 30, -10, -30,
+    -30, -10, 30, 40, 40, 30, -10, -30,
+    -30, -10, 20, 30, 30, 20, -10, -30,
+    -30, -30, 0, 0, 0, 0, -30, -30,
+    -50, -30, -30, -30, -30, -30, -30, -50
+]
+KING_TABLE_END_BLACK = KING_TABLE_END[::-1]
 
 
-def save_as_pickle(filename, data):
-    completeName = os.path.join("datasets/iter2/", filename)
-    with open(completeName, "wb") as output:
-        pickle.dump(data, output)
+def eval(board: chess.Board, root_color):
+    white_eval = 0
+    black_eval = 0
+    is_endgame = False
+
+    if board.queens == 0:
+        is_endgame = True
+    if board.queens & board.occupied_co[chess.WHITE] == 0 and board.queens & board.occupied_co[chess.BLACK] != 0:
+        is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.WHITE]) <= 1
+    elif board.queens & board.occupied_co[chess.BLACK] == 0 and board.queens & board.occupied_co[chess.WHITE] != 0:
+        is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.BLACK]) <= 1
+
+    for figure, weight, table in zip(
+            [board.pawns, board.knights, board.bishops, board.rooks, board.queens, board.kings],
+            [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
+            [[PAWN_TABLE, PAWN_TABLE_BLACK], [KNIGHT_TABLE, KNIGHT_TABLE_BLACK], [BISHOP_TABLE, BISHOP_TABLE_BLACK],
+             [ROOK_TABLE, ROOK_TABLE_BLACK], [QUEEN_TABLE, QUEEN_TABLE_BLACK],
+             [KING_TABLE if not is_endgame else KING_TABLE_END,
+              KING_TABLE_BLACK if not is_endgame else KING_TABLE_END_BLACK]]):
+        white_eval += count_ones(board.occupied_co[chess.WHITE] & figure) * weight + sum(
+            table[chess.WHITE][i] for i in range(64) if board.occupied_co[chess.WHITE] & figure & (1 << i))
+        black_eval += count_ones(board.occupied_co[chess.BLACK] & figure) * weight + sum(
+            table[chess.BLACK][i] for i in range(64) if board.occupied_co[chess.BLACK] & figure & (1 << i))
+
+    return (white_eval - black_eval) if root_color else (black_eval - white_eval)
 
 
-def load_pickle(filename):
-    completeName = os.path.join("datasets/", filename)
-    with open(completeName, "rb") as pkl_file:
-        data = pickle.load(pkl_file)
-    return data
+def count_ones(byte):
+    count = 0
+    while byte:
+        count += byte & 1
+        byte >>= 1
+    return count
 
 
-def MCTS_self_play(chessnet, num_games, cpu):
+def print_byte(byte):
+    if type(byte) == list:
+        for b in byte:
+            string = format(b, '0{}b'.format(64))
+            for i in range(0, len(string), 8):
+                print(string[i:i + 8])
+            print("\n")
+    else:
+        string = format(byte, '0{}b'.format(64))
+        for i in range(0, len(string), 8):
+            print(string[i:i + 8])
+    print("\n")
+
+
+def MCTS_self_play(num_games):
     for idxx in range(0, num_games):
-        current_board = chess.Board("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 1")
-        dataset = []  # to get state, policy, value for neural network training
+        current_board = chess.Board("r1bqkb1r/ppp1pppp/2n2n2/3p4/3P1B2/5N1P/PPP1PPP1/RN1QKB1R b KQkq - 0 4")
         states = []
-        value = 0
         while current_board.fullmove_number <= 100:
             draw_counter = 0
             for s in states:
                 if np.array_equal(current_board.board_fen(), s):
                     draw_counter += 1
-            if draw_counter == 3:  # draw by repetition
+            if draw_counter == 3:
                 break
             states.append(copy.deepcopy(current_board.board_fen()))
-            board_state = copy.deepcopy(ed.encode_board(current_board))
             t = time.time()
-            best_move, root = UCT_search(current_board, 40, chessnet)
-            print(root.child_total_value[root.child_total_value != 0])
+            best_move = UCT_search(current_board, 30000)
             print("time: ", time.time() - t)
-            current_board = do_decode_n_move_pieces(
-                current_board, best_move
-            )
-            policy = get_policy(root)
-            # dataset.append([board_state, policy])
-            fish.set_fen_position(current_board.fen())
-            eval = fish.get_evaluation()
+            current_board.push(best_move)
+            print(current_board, eval(current_board, not current_board.turn), best_move)
 
-            if eval["type"] == "cp":
-                value = eval["value"]
-                if value > 0:
-                    eval = min(value/5000, 1)
-                elif value < 0:
-                    eval = max(value/5000, -1)
-                else:
-                    eval = 0
-            elif eval["type"] == "mate":
-                if eval["value"] > 0:
-                    eval = 1
-                else:
-                    eval = -1
-            print(eval, board_state[1,1,12], current_board.fen())
-            dataset.append([board_state, policy, eval])
-            print(current_board, current_board.fullmove_number)
-            print(" ")
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins
-                    value = -1
                     print("Black wins")
                 else:  # white wins
-                    value = 1
                     print("White wins")
                 break
-            else:
-                value = 0
-
-        # dataset_p = []
-        # for idx, data in enumerate(dataset):
-        #     s, p = data
-        #     if idx == 0:
-        #         dataset_p.append([s, p, 0])
-        #     else:
-        #         dataset_p.append([s, p, value])
-        dataset_p = [x for x in dataset]
-        del dataset
-        print("dataset_cpu%i_%i_%s_%i" % (cpu, idxx, datetime.datetime.now().strftime("%Y-%m-%d_%H:%M"), value))
-        save_as_pickle(
-            "dataset_cpu%i_%i_%s_%i" % (cpu, idxx, datetime.datetime.now().strftime("%Y-%m-%d_%H-%M"), value),
-            dataset_p,
-        )
 
 
-if __name__ == "__main__":
-    net_to_play = "current_net_trained8_iter1.pth.tar"
-    mp.set_start_method("spawn", force=True)
-    net = ChessNet()
-    cuda = torch.cuda.is_available()
-    if cuda:
-        net.cuda()
-    net.share_memory()
-    net.eval()
-    print("hi")
-
-    current_net_filename = os.path.join("./model_data/", net_to_play)
-    # check if file exists
-    if not os.path.isfile(current_net_filename):
-        torch.save({"state_dict": net.state_dict()}, os.path.join("./model_data/", net_to_play))
-        print("created model")
-
-    checkpoint = torch.load(current_net_filename)
-    net.load_state_dict(checkpoint['state_dict'])
-
-    # processes = []
-    # for i in range(1):
-    #     p = mp.Process(target=MCTS_self_play, args=(net, 50, i))
-    #     p.start()
-    #     processes.append(p)
-    # for p in processes:
-    #     p.join()
-
-    MCTS_self_play(net, 50, 0)
+MCTS_self_play(50)
