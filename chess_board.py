@@ -1100,34 +1100,40 @@ class BaseBoard:
         """
         return self.pin_mask(color, square) != BB_ALL
 
-    def _remove_piece_at(self, square: Square, castling=False) -> Optional[PieceType]:
+    def _remove_piece_at(self, square: Square, print=False) -> Optional[PieceType]:
         piece_type = self.piece_type_at(square)
         mask = BB_SQUARES[square]
-
+        mask2 = ~mask
+        # mask2 = 2**mask.bit_length() - mask
+        # self.print_byte(self.white_knights)
+        if print:
+            self.print_byte(mask)
+            self.print_byte(self.white_knights)
+            self.print_byte(self.white_knights & mask2)
         if piece_type == PAWN:
             self.pawns ^= mask
-            self.white_pawns &= ~ mask
-            self.black_pawns &= ~ mask
+            self.white_pawns &= mask2
+            self.black_pawns &= mask2
         elif piece_type == KNIGHT:
             self.knights ^= mask
-            self.white_knights &= ~ mask
-            self.black_knights &= ~ mask
+            self.white_knights &= mask2
+            self.black_knights &=  mask2
         elif piece_type == BISHOP:
             self.bishops ^= mask
-            self.white_bishops &= ~ mask
-            self.black_bishops &= ~ mask
+            self.white_bishops &=  mask2
+            self.black_bishops &=  mask2
         elif piece_type == ROOK:
             self.rooks ^= mask
-            self.white_rooks &= ~ mask
-            self.black_rooks &= ~ mask
+            self.white_rooks &=  mask2
+            self.black_rooks &=  mask2
         elif piece_type == QUEEN:
             self.queens ^= mask
-            self.white_queens &= ~ mask
-            self.black_queens &= ~ mask
+            self.white_queens &=  mask2
+            self.black_queens &=  mask2
         elif piece_type == KING:
             self.kings ^= mask
-            self.white_kings &= ~mask
-            self.black_kings &= ~mask
+            self.white_kings &= mask2
+            self.black_kings &= mask2
         else:
             return None
 
@@ -1859,8 +1865,6 @@ class Board(BaseBoard):
 
         if fen is None:
             self.clear()
-        elif fen == type(self).starting_fen:
-            self.reset()
         else:
             self.set_fen(fen)
 
@@ -2276,7 +2280,7 @@ class Board(BaseBoard):
     def _push_capture(self, move: tuple, capture_square: Square, piece_type: PieceType, was_promoted: bool) -> None:
         pass
 
-    def push(self: BoardT, move: tuple) -> None:
+    def push(self: BoardT, move: tuple, print=False) -> None:
         """
         Updates the position with the given *move* and puts it onto the
         move stack.
@@ -2326,7 +2330,7 @@ class Board(BaseBoard):
         to_bb = BB_SQUARES[move[TO_SQUARE]]
 
         promoted = bool(self.promoted & from_bb)
-        piece_type = self._remove_piece_at(move[FROM_SQUARE])
+        piece_type = self._remove_piece_at(move[FROM_SQUARE], print)
         assert piece_type is not None, f"push() expects move to be pseudo-legal, but got {move} in {self.board_fen()}"
         capture_square = move[TO_SQUARE]
         captured_piece_type = self.piece_type_at(capture_square)
@@ -2368,8 +2372,8 @@ class Board(BaseBoard):
         if castling:
             a_side = square_file(move[TO_SQUARE]) < square_file(move[FROM_SQUARE])
 
-            self._remove_piece_at(move[FROM_SQUARE], castling=True)
-            self._remove_piece_at(move[TO_SQUARE], castling=True)
+            self._remove_piece_at(move[FROM_SQUARE])
+            self._remove_piece_at(move[TO_SQUARE])
 
             if a_side:
                 self._set_piece_at(C1 if self.turn == WHITE else C8, KING, self.turn)

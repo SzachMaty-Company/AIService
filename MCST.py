@@ -60,7 +60,7 @@ class UCTNode:
         return self.child_Q()  + 1.5 * self.child_U()
 
     def best_child(self, root_color):
-        # if self.depth > 2:
+        # if self.depth == 100:
         #     return None
 
         best_index = self.value()
@@ -97,6 +97,7 @@ class UCTNode:
             self.child_total_value = self.child_total_value[:self.child_move_index]
             self.child_number_visits = self.child_number_visits[:self.child_move_index]
             self.child_expanded = self.child_expanded[:self.child_move_index]
+            self.children = self.children[:self.child_move_index]
             return self
     def backup(self, root_color):
         global MX
@@ -105,7 +106,7 @@ class UCTNode:
             MX+=1
         if self.number_visits == 0.000001:
             self.number_visits = 1
-            value = eval(self.board)
+            value = eval(self.board, root_color)
             self.total_value = value
         else:
             self.number_visits += 1
@@ -145,14 +146,13 @@ def UCT_search(game_state, num_reads):
         leaf = leaf.expand()
         leaf.backup(root_color=root.board.turn)
     # while True:
-    #     print(root.child_total_value)
-    #     print(root.child_number_visits)
+    #     print(np.array([(x,y,z) for x,y,z in zip(root.child_total_value, np.array([str(chess.Move(*c.move)) for c in root.children]), root.child_number_visits)]))
     #     most_visited_index = np.argmax(root.child_number_visits)
     #     print(chess.Move(*root.children[most_visited_index].move), most_visited_index)
     #     print("=====================================")
     #     root = root.children[most_visited_index]
 
-    return root.get_highest_value()
+    return root.get_most_visited()
 
 
 PAWN = 100
@@ -170,7 +170,7 @@ PAWN_TABLE = [
     5, -5, -10, 0, 0, -10, -5, 5,
     5, 10, 10, -20, -20, 10, 10, 5,
     0, 0, 0, 0, 0, 0, 0, 0
-]
+][::-1]
 PAWN_TABLE_BLACK = PAWN_TABLE[::-1]
 KNIGHT_TABLE = [
     -50, -40, -30, -30, -30, -30, -40, -50,
@@ -181,7 +181,7 @@ KNIGHT_TABLE = [
     -30, 5, 10, 15, 15, 10, 5, -30,
     -40, -20, 0, 5, 5, 0, -20, -40,
     -50, -40, -30, -30, -30, -30, -40, -50
-]
+][::-1]
 KNIGHT_TABLE_BLACK = KNIGHT_TABLE[::-1]
 BISHOP_TABLE = [
     -20, -10, -10, -10, -10, -10, -10, -20,
@@ -192,7 +192,7 @@ BISHOP_TABLE = [
     -10, 10, 10, 10, 10, 10, 10, -10,
     -10, 5, 0, 0, 0, 0, 5, -10,
     -20, -10, -10, -10, -10, -10, -10, -20
-]
+][::-1]
 BISHOP_TABLE_BLACK = BISHOP_TABLE[::-1]
 ROOK_TABLE = [
     0, 0, 0, 0, 0, 0, 0, 0,
@@ -203,7 +203,7 @@ ROOK_TABLE = [
     -5, 0, 0, 0, 0, 0, 0, -5,
     -5, 0, 0, 0, 0, 0, 0, -5,
     0, 0, 0, 5, 5, 0, 0, 0
-]
+][::-1]
 ROOK_TABLE_BLACK = ROOK_TABLE[::-1]
 QUEEN_TABLE = [
     -20, -10, -10, -5, -5, -10, -10, -20,
@@ -214,7 +214,7 @@ QUEEN_TABLE = [
     -10, 5, 5, 5, 5, 5, 0, -10,
     -10, 0, 5, 0, 0, 0, 0, -10,
     -20, -10, -10, -5, -5, -10, -10, -20
-]
+][::-1]
 QUEEN_TABLE_BLACK = QUEEN_TABLE[::-1]
 KING_TABLE = [
     -30, -40, -40, -50, -50, -40, -40, -30,
@@ -225,7 +225,7 @@ KING_TABLE = [
     -10, -20, -20, -20, -20, -20, -20, -10,
     20, 20, 0, 0, 0, 0, 20, 20,
     20, 30, 10, 0, 0, 10, 30, 20
-]
+][::-1]
 KING_TABLE_BLACK = KING_TABLE[::-1]
 KING_TABLE_END = [
     -50, -40, -30, -20, -20, -30, -40, -50,
@@ -236,16 +236,17 @@ KING_TABLE_END = [
     -30, -10, 20, 30, 30, 20, -10, -30,
     -30, -30, 0, 0, 0, 0, -30, -30,
     -50, -30, -30, -30, -30, -30, -30, -50
-]
+][::-1]
 KING_TABLE_END_BLACK = KING_TABLE_END[::-1]
 
 
-def eval(board: chess.Board):
+def eval(board: chess.Board, root_color):
     white_eval = 0
     black_eval = 0
     is_endgame = False
-
-    board_hash = None#zobrist_hash(board)
+    xd = []
+    kk = []
+    board_hash = zobrist_hash(board)
     if board_hash in trans:
         white_eval, black_eval = trans[board_hash]
     else:
@@ -264,8 +265,13 @@ def eval(board: chess.Board):
                  KING_TABLE if not is_endgame else KING_TABLE_END]):
 
             white_eval += count_ones(figure) * weight
-            white_eval += sum(table[i] for i in range(64) if figure & (1 << i))
-
+            xd.append(count_ones(figure) * weight)
+            if figure:
+                white_eval += sum(table[i] for i in range(64) if figure & (1 << i))
+                kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
+        pass
+        xd = []
+        kk = []
         for figure, weight, table in zip(
                 [board.black_pawns, board.black_knights, board.black_bishops, board.black_rooks, board.black_queens, board.black_kings],
                 [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
@@ -274,12 +280,14 @@ def eval(board: chess.Board):
                  KING_TABLE_BLACK if not is_endgame else KING_TABLE_END_BLACK]):
 
             black_eval += count_ones(figure) * weight
+            xd.append(count_ones(figure) * weight)
             if figure:
                 black_eval += sum(table[i] for i in range(64) if figure & (1 << i))
+                kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
 
-        # trans[board_hash] = [white_eval, black_eval]
+        trans[board_hash] = [white_eval, black_eval]
 
-    return (white_eval - black_eval) if not board.turn else (black_eval - white_eval)
+    return (white_eval - black_eval) if root_color else (black_eval - white_eval)
 
 
 def count_ones(n):
@@ -306,13 +314,15 @@ def print_byte(byte):
     else:
         string = format(byte, '0{}b'.format(64))
         for i in range(0, len(string), 8):
-            print(string[i:i + 8][::-1])
+            print(string[i:i + 8])
     print("\n")
 
 
 def MCTS_self_play(num_games):
     for idxx in range(0, num_games):
-        current_board = chess.Board("r1bqkb1r/ppp1pppp/2n2n2/3p4/3P1B2/5N1P/PPP1PPP1/RN1QKB1R b KQkq - 0 4")
+        current_board = chess.Board("r1bqkbnr/pp1ppppp/2n5/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 1")
+        # print(eval(current_board, True))
+        # exit()
         states = []
         while current_board.fullmove_number <= 100:
             draw_counter = 0
@@ -326,7 +336,9 @@ def MCTS_self_play(num_games):
             best_move = UCT_search(current_board, 25000)
             print("time: ", time.time() - t)
             current_board.push(best_move)
-            print(current_board, eval(current_board), best_move, chess.Move(*best_move))
+            global trans
+            trans = {}
+            print(current_board, eval(current_board, not current_board.turn), best_move, chess.Move(*best_move))
 
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins
