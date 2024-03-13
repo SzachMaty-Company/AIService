@@ -22,7 +22,7 @@ def encode_board(board):
         piece = board.piece_at(square)
 
         if piece:
-            encoded[63-square, encoder_dict[piece.symbol()]] = 1
+            encoded[63 - square, encoder_dict[piece.symbol()]] = 1
 
     encoded = encoded.reshape(8, 8, 19)
 
@@ -36,8 +36,8 @@ def encode_board(board):
     # print("\n".join(str(board).split("\n")[::-1]))
 
     if board.ep_square:
-        square = 63-board.ep_square
-        encoded[square//8,square%8,18] = 1
+        square = 63 - board.ep_square
+        encoded[square // 8, square % 8, 18] = 1
 
     return encoded
 

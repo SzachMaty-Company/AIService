@@ -1,18 +1,15 @@
-import collections
 import copy
-import math
-import random
 import time
 
 import chess_board as chess
 import numpy as np
-
+from chess.polyglot import zobrist_hash
 
 class CustomBoard(chess.Board):
     pass
 np.seterr(divide='ignore')
-
-
+MX = 0
+trans = {}
 class UCTNode:
     def __init__(self, board, move, move_index,parent=None, depth=0):
         self.board = board
@@ -25,6 +22,7 @@ class UCTNode:
         self.children = [None]*200
         self.child_total_value = np.zeros([200], dtype=np.float32)
         self.child_number_visits = np.repeat(0.000001, 200)
+        self.child_expanded = np.zeros([200], dtype=np.byte)
         self.depth = depth
     @property
     def number_visits(self):
@@ -50,16 +48,27 @@ class UCTNode:
 
         return self.children[most_visited_index].move
 
-    def child_U(self):
-        return np.sqrt(np.log(self.number_visits) / (1+self.child_number_visits))# or 0.0000001))
+    def get_highest_value(self) -> tuple:
+        most_visited_index = np.argmax(self.child_total_value)
 
-    def value(self, root_color):
-        return (self.child_Q() )* (1 if self.board.turn != root_color else -1) + 1.5 * self.child_U()
+        return self.children[most_visited_index].move
+
+    def child_U(self):
+        return np.sqrt(np.log(self.number_visits) / self.child_number_visits)
+
+    def value(self):
+        return self.child_Q()  + 1.5 * self.child_U()
 
     def best_child(self, root_color):
-        best = None
+        # if self.depth > 2:
+        #     return None
 
-        best_index = np.argmax(self.child_Q() + 1.5*self.child_U())
+        best_index = self.value()
+        # best_index[self.child_move_index:] = -20000
+        if not np.any(best_index):
+            return None
+        best_index = np.argmax(best_index)
+        # best_index = np.argmax(best_index)
         best = self.children[best_index]
 
         return best
@@ -75,28 +84,40 @@ class UCTNode:
         return current
 
     def expand(self):
-        # print(*self.legal_moves)
         try:
             move = next(self.legal_moves)
             copy_board = self.board.copy(stack=False)
             copy_board.push(move)
             self.children[self.child_move_index] = UCTNode(copy_board, move, self.child_move_index,parent=self, depth=self.depth + 1)
             self.child_move_index += 1
+            return self.children[self.child_move_index - 1]
         except StopIteration:
             self.is_expanded = True
-
+            self.parent.child_expanded[self.move_index] = 1
+            self.child_total_value = self.child_total_value[:self.child_move_index]
+            self.child_number_visits = self.child_number_visits[:self.child_move_index]
+            self.child_expanded = self.child_expanded[:self.child_move_index]
+            return self
     def backup(self, root_color):
-        self.number_visits += 1
-        self.total_value = eval(self.board, root_color)
+        global MX
+
+        if self.depth == MX+1:
+            MX+=1
+        if self.number_visits == 0.000001:
+            self.number_visits = 1
+            value = eval(self.board)
+            self.total_value = value
+        else:
+            self.number_visits += 1
 
         current = self.parent
         while current.parent is not None:
             current.number_visits += 1
 
             if current.board.turn == root_color:
-                current.total_value += np.sum(current.child_total_value)
+                current.total_value = np.sum(self.child_total_value)
             else:
-                current.total_value -= np.sum(current.child_total_value)
+                current.total_value = -np.sum(self.child_total_value)
 
             current = current.parent
 
@@ -104,8 +125,10 @@ class UCTNode:
 class DummyNode(object):
     def __init__(self):
         self.parent = None
-        self.child_total_value = collections.defaultdict(float)
-        self.child_number_visits = collections.defaultdict(float)
+
+        self.child_total_value = np.zeros([1], dtype=np.float32)
+        self.child_number_visits = np.repeat(0.000001, 1)
+        self.child_expanded = np.zeros([1], dtype=np.byte)
 
 
 def UCT_search(game_state, num_reads):
@@ -119,19 +142,17 @@ def UCT_search(game_state, num_reads):
             else:
                 leaf.total_value = 10000
 
-        leaf.expand()
+        leaf = leaf.expand()
         leaf.backup(root_color=root.board.turn)
-    print(root.child_total_value)
-    print(root.child_number_visits)
-    print("=====================================")
     # while True:
     #     print(root.child_total_value)
     #     print(root.child_number_visits)
-    #     print(chess.Move(*root.children[root.get_most_visited()].move), root.children[root.get_most_visited()].move)
+    #     most_visited_index = np.argmax(root.child_number_visits)
+    #     print(chess.Move(*root.children[most_visited_index].move), most_visited_index)
     #     print("=====================================")
-    #     root = root.children[root.get_most_visited()]
+    #     root = root.children[most_visited_index]
 
-    return root.get_most_visited()
+    return root.get_highest_value()
 
 
 PAWN = 100
@@ -219,52 +240,73 @@ KING_TABLE_END = [
 KING_TABLE_END_BLACK = KING_TABLE_END[::-1]
 
 
-def eval(board: chess.Board, root_color):
+def eval(board: chess.Board):
     white_eval = 0
     black_eval = 0
     is_endgame = False
 
-    if board.queens == 0:
-        is_endgame = True
-    if board.queens & board.occupied_co[chess.WHITE] == 0 and board.queens & board.occupied_co[chess.BLACK] != 0:
-        is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.WHITE]) <= 1
-    elif board.queens & board.occupied_co[chess.BLACK] == 0 and board.queens & board.occupied_co[chess.WHITE] != 0:
-        is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.BLACK]) <= 1
+    board_hash = None#zobrist_hash(board)
+    if board_hash in trans:
+        white_eval, black_eval = trans[board_hash]
+    else:
+        if board.queens == 0:
+            is_endgame = True
+        if board.queens & board.occupied_co[chess.WHITE] == 0 and board.queens & board.occupied_co[chess.BLACK] != 0:
+            is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.WHITE]) <= 1
+        elif board.queens & board.occupied_co[chess.BLACK] == 0 and board.queens & board.occupied_co[chess.WHITE] != 0:
+            is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.BLACK]) <= 1
 
-    for figure, weight, table in zip(
-            [board.pawns, board.knights, board.bishops, board.rooks, board.queens, board.kings],
-            [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
-            [[PAWN_TABLE, PAWN_TABLE_BLACK], [KNIGHT_TABLE, KNIGHT_TABLE_BLACK], [BISHOP_TABLE, BISHOP_TABLE_BLACK],
-             [ROOK_TABLE, ROOK_TABLE_BLACK], [QUEEN_TABLE, QUEEN_TABLE_BLACK],
-             [KING_TABLE if not is_endgame else KING_TABLE_END,
-              KING_TABLE_BLACK if not is_endgame else KING_TABLE_END_BLACK]]):
-        white_eval += count_ones(board.occupied_co[chess.WHITE] & figure) * weight + sum(
-            table[chess.WHITE][i] for i in range(64) if board.occupied_co[chess.WHITE] & figure & (1 << i))
-        black_eval += count_ones(board.occupied_co[chess.BLACK] & figure) * weight + sum(
-            table[chess.BLACK][i] for i in range(64) if board.occupied_co[chess.BLACK] & figure & (1 << i))
+        for figure, weight, table in zip(
+                [board.white_pawns, board.white_knights, board.white_bishops, board.white_rooks, board.white_queens, board.white_kings],
+                [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
+                [PAWN_TABLE, KNIGHT_TABLE, BISHOP_TABLE,
+                 ROOK_TABLE, QUEEN_TABLE,
+                 KING_TABLE if not is_endgame else KING_TABLE_END]):
 
-    return (white_eval - black_eval) if root_color else (black_eval - white_eval)
+            white_eval += count_ones(figure) * weight
+            white_eval += sum(table[i] for i in range(64) if figure & (1 << i))
+
+        for figure, weight, table in zip(
+                [board.black_pawns, board.black_knights, board.black_bishops, board.black_rooks, board.black_queens, board.black_kings],
+                [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
+                [PAWN_TABLE_BLACK, KNIGHT_TABLE_BLACK, BISHOP_TABLE_BLACK,
+                 ROOK_TABLE_BLACK, QUEEN_TABLE_BLACK,
+                 KING_TABLE_BLACK if not is_endgame else KING_TABLE_END_BLACK]):
+
+            black_eval += count_ones(figure) * weight
+            if figure:
+                black_eval += sum(table[i] for i in range(64) if figure & (1 << i))
+
+        # trans[board_hash] = [white_eval, black_eval]
+
+    return (white_eval - black_eval) if not board.turn else (black_eval - white_eval)
 
 
-def count_ones(byte):
+def count_ones(n):
     count = 0
-    while byte:
-        count += byte & 1
-        byte >>= 1
+    while n:
+        n &= n - 1
+        count += 1
     return count
 
-
+def sum_values_where_bytes_are_1(byte_variable, value_array):
+    byte_size = len(value_array)
+    sum_values = 0
+    for i in range(byte_size):
+        if byte_variable & (1 << i):
+            sum_values += value_array[i]
+    return sum_values
 def print_byte(byte):
     if type(byte) == list:
         for b in byte:
             string = format(b, '0{}b'.format(64))
             for i in range(0, len(string), 8):
-                print(string[i:i + 8])
+                print(string[i:i + 8][::-1])
             print("\n")
     else:
         string = format(byte, '0{}b'.format(64))
         for i in range(0, len(string), 8):
-            print(string[i:i + 8])
+            print(string[i:i + 8][::-1])
     print("\n")
 
 
@@ -281,10 +323,10 @@ def MCTS_self_play(num_games):
                 break
             states.append(copy.deepcopy(current_board.board_fen()))
             t = time.time()
-            best_move = UCT_search(current_board, 30000)
+            best_move = UCT_search(current_board, 25000)
             print("time: ", time.time() - t)
             current_board.push(best_move)
-            print(current_board, eval(current_board, not current_board.turn), best_move)
+            print(current_board, eval(current_board), best_move, chess.Move(*best_move))
 
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins

@@ -40,9 +40,7 @@ class ConvBlock(nn.Module):
 class ResBlock(nn.Module):
     def __init__(self, inplanes=256, planes=256, stride=1, downsample=None):
         super(ResBlock, self).__init__()
-        self.conv1 = nn.Conv2d(
-            inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False
-        )
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(planes)
         self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(planes)
@@ -117,14 +115,10 @@ def train(net, dataset, epoch_start=0, epoch_stop=20, cpu=0):
     net.train()
     criterion = AlphaLoss()
     optimizer = optim.Adam(net.parameters(), lr=0.003)
-    scheduler = optim.lr_scheduler.MultiStepLR(
-        optimizer, milestones=[100, 200, 300, 400], gamma=0.2
-    )
+    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[100, 200, 300, 400], gamma=0.2)
 
     train_set = board_data(dataset)
-    train_loader = DataLoader(
-        train_set, batch_size=30, shuffle=True, num_workers=0, pin_memory=False
-    )
+    train_loader = DataLoader(train_set, batch_size=30, shuffle=True, num_workers=0, pin_memory=False)
     losses_per_epoch = []
     for epoch in range(epoch_start, epoch_stop):
         scheduler.step()
@@ -167,8 +161,4 @@ def train(net, dataset, epoch_start=0, epoch_stop=20, cpu=0):
     ax.set_ylabel("Loss per batch")
     ax.set_title("Loss vs Epoch")
     print("Finished Training")
-    plt.savefig(
-        os.path.join(
-            "model_data/", "Loss_vs_Epoch_%s.png" % datetime.datetime.today().strftime("%Y-%m-%d")
-        )
-    )
+    plt.savefig(os.path.join("model_data/", "Loss_vs_Epoch_%s.png" % datetime.datetime.today().strftime("%Y-%m-%d")))
