@@ -20,17 +20,9 @@ class UCTNode:
         self.parent = parent
         self.children = []
         self.child_total_value = np.zeros([200], dtype=np.float32)
-        self.child_number_visits = np.repeat(0, 200)
         self.depth = depth
         self.beta  = beta
         self.alpha = alpha
-    @property
-    def number_visits(self):
-        return self.parent.child_number_visits[self.move_index]
-
-    @number_visits.setter
-    def number_visits(self, value):
-        self.parent.child_number_visits[self.move_index] = value
 
     @property
     def total_value(self):
@@ -54,7 +46,6 @@ class UCTNode:
             best = current.expand(root_color)
             if type(best) == DummyNode:
                 return current
-            # best = current.children[current.child_move_index]
 
             if best.depth == 4:
                 value = eval(best.board, root_color)
@@ -62,10 +53,8 @@ class UCTNode:
                 best.parent.alpha = max(best.parent.alpha, value)
 
                 if best.parent.alpha >= best.parent.beta:
-                    # print("pruning")
                     best.parent.is_expanded = True
                     best.parent.child_total_value = best.parent.child_total_value[:best.parent.child_move_index]
-                    best.parent.child_number_visits = best.parent.child_number_visits[:best.parent.child_move_index]
                     best.parent.children = best.parent.children[:best.parent.child_move_index]
                     best.parent.backup(root_color)
                     return best.parent
@@ -77,7 +66,7 @@ class UCTNode:
     def expand(self, root_color):
         try:
             move = next(self.legal_moves)
-            copy_board = self.board.copy(stack=False)
+            copy_board = self.board.copy()
             copy_board.push(move)
             self.children.append(UCTNode(copy_board, move, self.child_move_index,parent=self, depth=self.depth + 1, alpha=self.alpha, beta=self.beta))
             self.child_move_index += 1
@@ -85,17 +74,12 @@ class UCTNode:
         except StopIteration:
             self.is_expanded = True
             self.child_total_value = self.child_total_value[:self.child_move_index]
-            self.child_number_visits = self.child_number_visits[:self.child_move_index]
             self.children = self.children[:self.child_move_index]
             self.backup(root_color)
             return self.parent
     def backup(self, root_color):
-        # self.total_value = eval(self.board, root_color)
-        # self.number_visits += 1
-
         current = self
         # while current.parent is not None:
-        current.number_visits += 1
         if current.is_expanded:
             if current.board.turn == root_color:
                 if self.child_move_index == 0:
@@ -119,14 +103,12 @@ class DummyNode(object):
     def __init__(self):
         self.parent = None
         self.child_total_value = np.zeros([1], dtype=np.float32)
-        self.child_number_visits = np.repeat(0.000001, 1)
         self.alpha = float('-inf')
         self.beta = float('inf')
 
 
-def UCT_search(game_state, num_reads):
+def UCT_search(game_state):
     root = UCTNode(game_state,move_index=0 ,move=None, parent=DummyNode())
-    # for i in range(num_reads):
     leaf = root
     while True:
         leaf = leaf.select_leaf(root.board.turn)
@@ -144,10 +126,6 @@ def UCT_search(game_state, num_reads):
     #     print(chess.Move(*root.children[most_visited_index].move), most_visited_index)
     #     print("=====================================")
     #     root = root.children[most_visited_index]
-
-        # leaf = leaf.expand()
-        # if leaf.depth == 3:
-        #     leaf.backup(root_color=root.board.turn)
 
     return root.get_highest_value()
 
@@ -329,7 +307,7 @@ def MCTS_self_play(num_games):
                 break
             states.append(copy.deepcopy(current_board.board_fen()))
             t = time.time()
-            best_move = UCT_search(current_board, 4000000)
+            best_move = UCT_search(current_board)
             print("time: ", time.time() - t)
             current_board.push(best_move)
             global trans

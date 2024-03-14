@@ -736,6 +736,8 @@ class Move:
     drop: Optional[PieceType] = None
     """The drop piece type or ``None``."""
 
+    piece: int|None = None
+
     def uci(self) -> str:
         """
         Gets a UCI string for the move.
@@ -753,9 +755,6 @@ class Move:
             return SQUARE_NAMES[self.from_square] + SQUARE_NAMES[self.to_square]
         else:
             return "0000"
-
-    def xboard(self) -> str:
-        return self.uci() if self else "@@@@"
 
     def __bool__(self) -> bool:
         return bool(self.from_square or self.to_square or self.promotion or self.drop)
@@ -830,8 +829,6 @@ class BaseBoard:
 
         if board_fen is None:
             self._clear_board()
-        elif board_fen == STARTING_BOARD_FEN:
-            self._reset_board()
         else:
             self._set_board_fen(board_fen)
 
@@ -1037,16 +1034,6 @@ class BaseBoard:
         en passant are **not** considered attacked.
         """
         return bool(self.attackers_mask(color, square))
-
-    def attackers(self, color: Color, square: Square) -> SquareSet:
-        """
-        Gets the set of attackers of the given color for the given square.
-
-        Pinned pieces still count as attackers.
-
-        Returns a :class:`set of squares <chess.SquareSet>`.
-        """
-        return SquareSet(self.attackers_mask(color, square))
 
     def pin_mask(self, color: Color, square: Square) -> Bitboard:
         king = self.king(color)
@@ -1739,7 +1726,7 @@ class _BoardState(Generic[BoardT]):
 class Board(BaseBoard):
     """
     A :class:`~chess.BaseBoard`, additional information representing
-    a chess position, and a :data:`move stack <chess.Board.move_stack>`.
+    a chess position
 
     Provides :data:`move generation <chess.Board.legal_moves>`, validation,
     :func:`parsing <chess.Board.parse_san()>`, attack generation,
@@ -1831,31 +1818,13 @@ class Board(BaseBoard):
     promoted: Bitboard
     """A bitmask of pieces that have been promoted."""
 
-    chess960: bool
-    """
-    Whether the board is in Chess960 mode. In Chess960 castling moves are
-    represented as king moves to the corresponding rook square.
-    """
-
-    move_stack: List[Move]
-    """
-    The move stack. Use :func:`Board.push() <chess.Board.push()>`,
-    :func:`Board.pop() <chess.Board.pop()>`,
-    :func:`Board.peek() <chess.Board.peek()>` and
-    :func:`Board.clear_stack() <chess.Board.clear_stack()>` for
-    manipulation.
-    """
-
-    def __init__(self: BoardT, fen: str = STARTING_FEN, *, chess960: bool = False) -> None:
+    def __init__(self: BoardT, fen: str = STARTING_FEN, *args) -> None:
         BaseBoard.__init__(self, None)
 
-        self.chess960 = chess960
-
         self.ep_square = None
-        self.move_stack = []
-        self._stack: List[_BoardState[BoardT]] = []
 
-        self.set_fen(fen)
+        if fen:
+            self.set_fen(fen)
 
     @property
     def legal_moves(self) -> LegalMoveGenerator:
@@ -1901,15 +1870,6 @@ class Board(BaseBoard):
         self.fullmove_number = 1
 
         self.reset_board()
-
-    def reset_board(self) -> None:
-        super().reset_board()
-        self.clear_stack()
-
-    def clear_stack(self) -> None:
-        """Clears the move stack."""
-        self.move_stack.clear()
-        self._stack.clear()
 
     def generate_pseudo_legal_moves(self, from_mask: Bitboard = BB_ALL, to_mask: Bitboard = BB_ALL) -> Iterator[tuple]:
         our_pieces = self.occupied_co[self.turn]
@@ -1992,40 +1952,14 @@ class Board(BaseBoard):
         for capturer in scan_reversed(capturers):
             yield (capturer, self.ep_square, None, None)
 
-    def generate_pseudo_legal_captures(
-        self, from_mask: Bitboard = BB_ALL, to_mask: Bitboard = BB_ALL
-    ) -> Iterator[Move]:
-        return itertools.chain(
-            self.generate_pseudo_legal_moves(from_mask, to_mask & self.occupied_co[not self.turn]),
-            self.generate_pseudo_legal_ep(from_mask, to_mask),
-        )
-
     def checkers_mask(self) -> Bitboard:
         king = self.king(self.turn)
         return BB_EMPTY if king is None else self.attackers_mask(not self.turn, king)
-
-    def checkers(self) -> SquareSet:
-        """
-        Gets the pieces currently giving check.
-
-        Returns a :class:`set of squares <chess.SquareSet>`.
-        """
-        return SquareSet(self.checkers_mask())
 
     def is_check(self) -> bool:
         """Tests if the current side to move is in check."""
         return bool(self.checkers_mask())
 
-    def gives_check(self, move: Move) -> bool:
-        """
-        Probes if the given move would put the opponent in check. The move
-        must be at least pseudo-legal.
-        """
-        self.push(move)
-        try:
-            return self.is_check()
-        finally:
-            self.pop()
 
     def is_into_check(self, move: Move) -> bool:
         king = self.king(self.turn)
@@ -2079,7 +2013,7 @@ class Board(BaseBoard):
 
         # Handle castling.
         if piece == KING:
-            move = self._from_chess960(self.chess960, move.from_square, move.to_square)
+            move = self._from_chess960( move.from_square, move.to_square)
             if move in self.generate_castling_moves():
                 return True
 
@@ -2349,17 +2283,6 @@ class Board(BaseBoard):
         # Swap turn.
         self.turn = not self.turn
 
-    def pop(self: BoardT) -> Move:
-        """
-        Restores the previous position and returns the last move from the stack.
-
-        :raises: :exc:`IndexError` if the move stack is empty.
-        """
-        move = self.move_stack.pop()
-        self._stack.pop().restore(self)
-        return move
-
-
     def castling_shredder_fen(self) -> str:
         castling_rights = self.clean_castling_rights()
         if not castling_rights:
@@ -2549,7 +2472,6 @@ class Board(BaseBoard):
         self.ep_square = ep_square
         self.halfmove_clock = halfmove_clock
         self.fullmove_number = fullmove_number
-        self.clear_stack()
 
     def _set_castling_fen(self, castling_fen: str) -> None:
         if not castling_fen or castling_fen == "-":
@@ -2588,32 +2510,18 @@ class Board(BaseBoard):
         """
         Sets castling rights from a string in FEN notation like ``Qqk``.
 
-        Also clears the move stack.
-
         :raises: :exc:`ValueError` if the castling FEN is syntactically
             invalid.
         """
         self._set_castling_fen(castling_fen)
-        self.clear_stack()
-
-    def set_board_fen(self, fen: str) -> None:
-        super().set_board_fen(fen)
-        self.clear_stack()
-
-    def set_piece_map(self, pieces: Mapping[Square, Piece]) -> None:
-        super().set_piece_map(pieces)
-        self.clear_stack()
 
     def set_chess960_pos(self, scharnagl: int) -> None:
         super().set_chess960_pos(scharnagl)
-        self.chess960 = True
         self.turn = WHITE
         self.castling_rights = self.rooks
         self.ep_square = None
         self.halfmove_clock = 0
         self.fullmove_number = 1
-
-        self.clear_stack()
 
     def chess960_pos(
         self, *, ignore_turn: bool = False, ignore_castling: bool = False, ignore_counters: bool = True
@@ -2670,7 +2578,7 @@ class Board(BaseBoard):
                 assert math.isfinite(operand), f"expected numeric epd operand to be finite, got: {operand}"
                 epd.append(f" {operand};")
             elif opcode == "pv" and not isinstance(operand, str) and hasattr(operand, "__iter__"):
-                position = self.copy(stack=False)
+                position = self.copy()
                 for move in operand:
                     epd.append(" ")
                     epd.append(position.san_and_push(move))
@@ -2840,10 +2748,6 @@ class Board(BaseBoard):
                             variation.append(move)
                             position.push(move)
 
-                        # Reset the position.
-                        while position.move_stack:
-                            position.pop()
-
                         operations[opcode] = variation
                     elif opcode in ["bm", "am"]:
                         # A set of moves.
@@ -3010,7 +2914,7 @@ class Board(BaseBoard):
 
         :raises: :exc:`IllegalMoveError` if any moves in the sequence are illegal.
         """
-        board = self.copy(stack=False)
+        board = self.copy()
         san = []
 
         for move in variation:
@@ -3045,17 +2949,8 @@ class Board(BaseBoard):
         return move
 
     def uci(self, move: Move, *, chess960: Optional[bool] = None) -> str:
-        """
-        Gets the UCI notation of the move.
-
-        *chess960* defaults to the mode of the board. Pass ``True`` to force
-        Chess960 mode.
-        """
-        if chess960 is None:
-            chess960 = self.chess960
-
         move = self._to_chess960(move)
-        move = self._from_chess960(chess960, move.from_square, move.to_square, move.promotion, move.drop)
+        move = self._from_chess960(move.from_square, move.to_square, move.promotion, move.drop)
         return move.uci()
 
     def xboard(self, move: Move, chess960: Optional[bool] = None) -> str:
@@ -3128,27 +3023,22 @@ class Board(BaseBoard):
         Returns valid castling rights filtered from
         :data:`~chess.Board.castling_rights`.
         """
-        if self._stack:
-            # No new castling rights are assigned in a game, so we can assume
-            # they were filtered already.
-            return self.castling_rights
 
         castling = self.castling_rights & self.rooks
         white_castling = castling & BB_RANK_1 & self.occupied_co[WHITE]
         black_castling = castling & BB_RANK_8 & self.occupied_co[BLACK]
 
-        if not self.chess960:
-            # The rooks must be on a1, h1, a8 or h8.
-            white_castling &= BB_A1 | BB_H1
-            black_castling &= BB_A8 | BB_H8
+        # The rooks must be on a1, h1, a8 or h8.
+        white_castling &= BB_A1 | BB_H1
+        black_castling &= BB_A8 | BB_H8
 
-            # The kings must be on e1 or e8.
-            if not self.white_kings & ~self.promoted & BB_E1:
-                white_castling = 0
-            if not self.black_kings & ~self.promoted & BB_E8:
-                black_castling = 0
+        # The kings must be on e1 or e8.
+        if not self.white_kings & ~self.promoted & BB_E1:
+            white_castling = 0
+        if not self.black_kings & ~self.promoted & BB_E8:
+            black_castling = 0
 
-            return white_castling | black_castling
+        return white_castling | black_castling
 
     def has_kingside_castling_rights(self, color: Color) -> bool:
         """
@@ -3197,10 +3087,7 @@ class Board(BaseBoard):
         Checks if there are castling rights that are only possible in Chess960.
         """
         # Get valid Chess960 castling rights.
-        chess960 = self.chess960
-        self.chess960 = True
         castling_rights = self.clean_castling_rights()
-        self.chess960 = chess960
 
         # Standard chess castling rights can only be on the standard
         # starting rook squares.
@@ -3507,17 +3394,16 @@ class Board(BaseBoard):
                 or self._attacked_for_king(king_path | king, self.occupied ^ king)
                 or self._attacked_for_king(king_to, self.occupied ^ king ^ rook ^ rook_to)
             ):
-                yield self._from_chess960(self.chess960, msb(king), candidate)
+                yield self._from_chess960(msb(king), candidate)
 
     def _from_chess960(
         self,
-        chess960: bool,
         from_square: Square,
         to_square: Square,
         promotion: Optional[PieceType] = None,
         drop: Optional[PieceType] = None,
     ) -> tuple:
-        if not chess960 and promotion is None and drop is None:
+        if promotion is None and drop is None:
             if from_square == E1 and self.kings & BB_E1:
                 if to_square == H1:
                     return (E1, G1, None, None)
@@ -3561,10 +3447,7 @@ class Board(BaseBoard):
         )
 
     def __repr__(self) -> str:
-        if not self.chess960:
-            return f"{type(self).__name__}({self.fen()!r})"
-        else:
-            return f"{type(self).__name__}({self.fen()!r}, chess960=True)"
+        return f"{type(self).__name__}({self.fen()!r})"
 
     def __eq__(self, board: object) -> bool:
         if isinstance(board, Board):
@@ -3579,12 +3462,11 @@ class Board(BaseBoard):
 
     def apply_transform(self, f: Callable[[Bitboard], Bitboard]) -> None:
         super().apply_transform(f)
-        self.clear_stack()
         self.ep_square = None if self.ep_square is None else msb(f(BB_SQUARES[self.ep_square]))
         self.castling_rights = f(self.castling_rights)
 
     def transform(self: BoardT, f: Callable[[Bitboard], Bitboard]) -> BoardT:
-        board = self.copy(stack=False)
+        board = self.copy()
         board.apply_transform(f)
         return board
 
@@ -3607,7 +3489,7 @@ class Board(BaseBoard):
         board.apply_mirror()
         return board
 
-    def copy(self: BoardT, *, stack: Union[bool, int] = True) -> BoardT:
+    def copy(self: BoardT, *args) -> BoardT:
         """
         Creates a copy of the board.
 
@@ -3616,29 +3498,22 @@ class Board(BaseBoard):
         """
         board = super().copy()
 
-        board.chess960 = self.chess960
-
         board.ep_square = self.ep_square
         board.castling_rights = self.castling_rights
         board.turn = self.turn
         board.fullmove_number = self.fullmove_number
         board.halfmove_clock = self.halfmove_clock
 
-        if stack:
-            stack = len(self.move_stack) if stack is True else stack
-            board.move_stack = [copy.copy(move) for move in self.move_stack[-stack:]]
-            board._stack = self._stack[-stack:]
-
         return board
 
     @classmethod
-    def empty(cls: Type[BoardT], *, chess960: bool = False) -> BoardT:
+    def empty(cls: Type[BoardT], *args) -> BoardT:
         """Creates a new empty board. Also see :func:`~chess.Board.clear()`."""
-        return cls(None, chess960=chess960)
+        return cls(None)
 
     @classmethod
     def from_epd(
-        cls: Type[BoardT], epd: str, *, chess960: bool = False
+        cls: Type[BoardT], epd: str, *args
     ) -> Tuple[BoardT, Dict[str, Union[None, str, int, float, Move, List[Move]]]]:
         """
         Creates a new board from an EPD string. See
@@ -3646,12 +3521,12 @@ class Board(BaseBoard):
 
         Returns the board and the dictionary of parsed operations as a tuple.
         """
-        board = cls.empty(chess960=chess960)
+        board = cls.empty()
         return board, board.set_epd(epd)
 
     @classmethod
     def from_chess960_pos(cls: Type[BoardT], scharnagl: int) -> BoardT:
-        board = cls.empty(chess960=True)
+        board = cls.empty()
         board.set_chess960_pos(scharnagl)
         return board
 
