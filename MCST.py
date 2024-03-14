@@ -296,10 +296,10 @@ def print_byte(byte):
 
 def MCTS_self_play(num_games):
     for idxx in range(0, num_games):
-        current_board = chess.Board("r1bqkbnr/pp1ppppp/2n5/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 1")
+        current_board = chess.Board("r1bqkb1r/pp1ppppp/2n2n2/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
         states = []
         while current_board.fullmove_number <= 200:
-            draw_counter = 0
+            draw_counter = 0 # TODO save what captured during generation, and so sort the moves
             for s in states:
                 if np.array_equal(current_board.board_fen(), s):
                     draw_counter += 1
@@ -309,7 +309,7 @@ def MCTS_self_play(num_games):
             t = time.time()
             best_move = UCT_search(current_board)
             print("time: ", time.time() - t)
-            current_board.push(best_move)
+            current_board.push(best_move, True)
             global trans
             trans = {}
             print(current_board, eval(current_board, not current_board.turn), best_move, chess.Move(*best_move))
