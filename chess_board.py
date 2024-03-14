@@ -895,21 +895,37 @@ class BaseBoard:
 
     def pieces_mask(self, piece_type: PieceType, color: Color) -> Bitboard:
         if piece_type == PAWN:
-            bb = self.pawns
+            if color == WHITE:
+                return self.white_pawns
+            else:
+                return self.black_pawns
         elif piece_type == KNIGHT:
-            bb = self.knights
+            if color == WHITE:
+                return self.white_knights
+            else:
+                return self.black_knights
         elif piece_type == BISHOP:
-            bb = self.bishops
+            if color == WHITE:
+                return self.white_bishops
+            else:
+                return self.black_bishops
         elif piece_type == ROOK:
-            bb = self.rooks
+            if color == WHITE:
+                return self.white_rooks
+            else:
+                return self.black_rooks
         elif piece_type == QUEEN:
-            bb = self.queens
+            if color == WHITE:
+                return self.white_queens
+            else:
+                return self.black_queens
         elif piece_type == KING:
-            bb = self.kings
+            if color == WHITE:
+                return self.white_kings
+            else:
+                return self.black_kings
         else:
             assert False, f"expected PieceType, got {piece_type!r}"
-
-        return bb & self.occupied_co[color]
 
     def pieces(self, piece_type: PieceType, color: Color) -> SquareSet:
         """
@@ -990,16 +1006,6 @@ class BaseBoard:
                 )
             return attacks
 
-    def attacks(self, square: Square) -> SquareSet:
-        """
-        Gets the set of attacked squares from the given square.
-
-        There will be no attacks if the square is empty. Pinned pieces are
-        still attacking other squares.
-
-        Returns a :class:`set of squares <chess.SquareSet>`.
-        """
-        return SquareSet(self.attacks_mask(square))
 
     def _attackers_mask(self, color: Color, square: Square, occupied: Bitboard) -> Bitboard:
         rank_pieces = BB_RANK_MASKS[square] & occupied
@@ -1217,20 +1223,6 @@ class BaseBoard:
 
         if promoted:
             self.promoted ^= mask
-
-    def set_piece_at(self, square: Square, piece: Optional[Piece], promoted: bool = False) -> None:
-        """
-        Sets a piece at the given square.
-
-        An existing piece is replaced. Setting *piece* to ``None`` is
-        equivalent to :func:`~chess.Board.remove_piece_at()`.
-
-        :class:`~chess.Board` also clears the move stack.
-        """
-        if piece is None:
-            self._remove_piece_at(square)
-        else:
-            self._set_piece_at(square, piece.piece_type, piece.color, promoted)
 
     def board_fen(self, *, promoted: Optional[bool] = False) -> str:
         """
@@ -1854,7 +1846,7 @@ class Board(BaseBoard):
     manipulation.
     """
 
-    def __init__(self: BoardT, fen: Optional[str] = STARTING_FEN, *, chess960: bool = False) -> None:
+    def __init__(self: BoardT, fen: str = STARTING_FEN, *, chess960: bool = False) -> None:
         BaseBoard.__init__(self, None)
 
         self.chess960 = chess960
@@ -1863,10 +1855,7 @@ class Board(BaseBoard):
         self.move_stack = []
         self._stack: List[_BoardState[BoardT]] = []
 
-        if fen is None:
-            self.clear()
-        else:
-            self.set_fen(fen)
+        self.set_fen(fen)
 
     @property
     def legal_moves(self) -> LegalMoveGenerator:
@@ -1917,57 +1906,20 @@ class Board(BaseBoard):
         super().reset_board()
         self.clear_stack()
 
-    def clear(self) -> None:
-        """
-        Clears the board.
-
-        Resets move stack and move counters. The side to move is white. There
-        are no rooks or kings, so castling rights are removed.
-
-        In order to be in a valid :func:`~chess.Board.status()`, at least kings
-        need to be put on the board.
-        """
-        self.turn = WHITE
-        self.castling_rights = BB_EMPTY
-        self.ep_square = None
-        self.halfmove_clock = 0
-        self.fullmove_number = 1
-
-        self.clear_board()
-
-    def clear_board(self) -> None:
-        super().clear_board()
-        self.clear_stack()
-
     def clear_stack(self) -> None:
         """Clears the move stack."""
         self.move_stack.clear()
         self._stack.clear()
 
-    def remove_piece_at(self, square: Square) -> Optional[Piece]:
-        piece = super().remove_piece_at(square)
-        self.clear_stack()
-        return piece
-
-    def set_piece_at(self, square: Square, piece: Optional[Piece], promoted: bool = False) -> None:
-        super().set_piece_at(square, piece, promoted=promoted)
-        self.clear_stack()
-
     def generate_pseudo_legal_moves(self, from_mask: Bitboard = BB_ALL, to_mask: Bitboard = BB_ALL) -> Iterator[tuple]:
         our_pieces = self.occupied_co[self.turn]
 
-        # Generate piece moves.
         non_pawns = our_pieces & ~self.pawns & from_mask
         for from_square in scan_reversed(non_pawns):
             moves = self.attacks_mask(from_square) & ~our_pieces & to_mask
             for to_square in scan_reversed(moves):
                 yield (from_square, to_square, None, None)
 
-        # Generate castling moves.
-        if from_mask & self.kings:
-            yield from self.generate_castling_moves(from_mask, to_mask)
-
-        # The remaining moves are all pawn moves.
         pawns = self.pawns & self.occupied_co[self.turn] & from_mask
         if not pawns:
             return
@@ -2017,6 +1969,10 @@ class Board(BaseBoard):
         # Generate en passant captures.
         if self.ep_square:
             yield from self.generate_pseudo_legal_ep(from_mask, to_mask)
+
+        # Generate castling moves.
+        if from_mask & self.kings:
+            yield from self.generate_castling_moves(from_mask, to_mask)
 
     def generate_pseudo_legal_ep(self, from_mask: Bitboard = BB_ALL, to_mask: Bitboard = BB_ALL) -> Iterator[tuple]:
         if not self.ep_square or not BB_SQUARES[self.ep_square] & to_mask:
@@ -2403,29 +2359,6 @@ class Board(BaseBoard):
         self._stack.pop().restore(self)
         return move
 
-    def find_move(self, from_square: Square, to_square: Square, promotion: Optional[PieceType] = None) -> Move:
-        """
-        Finds a matching legal move for an origin square, a target square, and
-        an optional promotion piece type.
-
-        For pawn moves to the backrank, the promotion piece type defaults to
-        :data:`chess.QUEEN`, unless otherwise specified.
-
-        Castling moves are normalized to king moves by two steps, except in
-        Chess960.
-
-        :raises: :exc:`IllegalMoveError` if no matching legal move is found.
-        """
-        if promotion is None and self.pawns & BB_SQUARES[from_square] and BB_SQUARES[to_square] & BB_BACKRANKS:
-            promotion = QUEEN
-
-        move = self._from_chess960(self.chess960, from_square, to_square, promotion)
-        if not self.is_legal(move):
-            raise IllegalMoveError(
-                f"no matching legal move for {move.uci()} ({SQUARE_NAMES[from_square]} -> {SQUARE_NAMES[to_square]}) in {self.fen()}"
-            )
-
-        return move
 
     def castling_shredder_fen(self) -> str:
         castling_rights = self.clean_castling_rights()
@@ -3166,29 +3099,16 @@ class Board(BaseBoard):
         return bool(
             touched & cr
             or cr & BB_RANK_1
-            and touched & self.kings & self.occupied_co[WHITE] & ~self.promoted
+            and touched & self.white_kings & ~self.promoted
             or cr & BB_RANK_8
-            and touched & self.kings & self.occupied_co[BLACK] & ~self.promoted
+            and touched & self.black_kings & ~self.promoted
         )
-
-    def is_irreversible(self, move: Move) -> bool:
-        """
-        Checks if the given pseudo-legal move is irreversible.
-
-        In standard chess, pawn moves, captures, moves that destroy castling
-        rights and moves that cede en passant are irreversible.
-
-        This method has false-negatives with forced lines. For example, a check
-        that will force the king to lose castling rights is not considered
-        irreversible. Only the actual king move is.
-        """
-        return self.is_zeroing(move) or self._reduces_castling_rights(move) or self.has_legal_en_passant()
 
     def is_castling(self, move: tuple) -> bool:
         """Checks if the given pseudo-legal move is a castling move."""
         if self.kings & BB_SQUARES[move[FROM_SQUARE]]:
             diff = square_file(move[FROM_SQUARE]) - square_file(move[TO_SQUARE])
-            return abs(diff) > 1 or bool(self.rooks & self.occupied_co[self.turn] & BB_SQUARES[move[TO_SQUARE]])
+            return abs(diff) > 1 or bool((self.white_rooks if self.turn == WHITE else self.black_rooks) & BB_SQUARES[move[TO_SQUARE]])
         return False
 
     def is_kingside_castling(self, move: Move) -> bool:
@@ -3236,7 +3156,7 @@ class Board(BaseBoard):
         castling rights.
         """
         backrank = BB_RANK_1 if color == WHITE else BB_RANK_8
-        king_mask = self.kings & self.occupied_co[color] & backrank & ~self.promoted
+        king_mask = (self.white_kings if color == WHITE else self.black_kings) & backrank & ~self.promoted
         if not king_mask:
             return False
 
@@ -3257,7 +3177,7 @@ class Board(BaseBoard):
         castling rights.
         """
         backrank = BB_RANK_1 if color == WHITE else BB_RANK_8
-        king_mask = self.kings & self.occupied_co[color] & backrank & ~self.promoted
+        king_mask = (self.white_kings if color == WHITE else self.black_kings) & backrank & ~self.promoted
         if not king_mask:
             return False
 
@@ -3368,7 +3288,7 @@ class Board(BaseBoard):
 
         # More than the maximum number of possible checkers in the variant.
         checkers = self.checkers_mask()
-        our_kings = self.kings & self.occupied_co[self.turn] & ~self.promoted
+        our_kings = (self.white_kings if self.turn == WHITE else self.black_kings) & ~self.promoted
         if checkers:
             if popcount(checkers) > 2:
                 errors |= STATUS_TOO_MANY_CHECKERS
@@ -3408,7 +3328,7 @@ class Board(BaseBoard):
 
         # The last move must have been a double pawn push, so there must
         # be a pawn of the correct color on the fourth or fifth rank.
-        if not self.pawns & self.occupied_co[not self.turn] & pawn_mask:
+        if not (self.black_pawns if self.turn == WHITE else self.white_pawns) & pawn_mask:
             return None
 
         # And the en passant square must be empty.
@@ -3524,7 +3444,7 @@ class Board(BaseBoard):
         if self.is_variant_end():
             return
 
-        king_mask = self.kings & self.occupied_co[self.turn]
+        king_mask = (self.white_kings if self.turn == WHITE else self.black_kings )
         if king_mask:
             king = msb(king_mask)
             blockers = self._slider_blockers(king)

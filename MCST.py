@@ -1,17 +1,16 @@
 import copy
 import time
 
-import chess_board as chess
-import numpy as np
 from chess.polyglot import zobrist_hash
 
-class CustomBoard(chess.Board):
-    pass
+import chess_board as chess
+import numpy as np
+
 np.seterr(divide='ignore')
 MX = 0
 trans = {}
 class UCTNode:
-    def __init__(self, board, move, move_index,parent=None, depth=0):
+    def __init__(self, board, move, move_index,parent=None, depth=0, alpha=float('-inf'), beta=float('inf')):
         self.board = board
         self.move_index = move_index
         self.child_move_index = 0
@@ -19,11 +18,12 @@ class UCTNode:
         self.legal_moves = board.generate_legal_moves()
         self.is_expanded = False
         self.parent = parent
-        self.children = [None]*200
+        self.children = []
         self.child_total_value = np.zeros([200], dtype=np.float32)
-        self.child_number_visits = np.repeat(0.000001, 200)
-        self.child_expanded = np.zeros([200], dtype=np.byte)
+        self.child_number_visits = np.repeat(0, 200)
         self.depth = depth
+        self.beta  = beta
+        self.alpha = alpha
     @property
     def number_visits(self):
         return self.parent.child_number_visits[self.move_index]
@@ -40,119 +40,116 @@ class UCTNode:
     def total_value(self, value):
         self.parent.child_total_value[self.move_index] = value
 
-    def child_Q(self):
-        return self.child_total_value / self.child_number_visits
-
-    def get_most_visited(self) -> tuple:
-        most_visited_index = np.argmax(self.child_number_visits)
-
-        return self.children[most_visited_index].move
 
     def get_highest_value(self) -> tuple:
         most_visited_index = np.argmax(self.child_total_value)
 
         return self.children[most_visited_index].move
 
-    def child_U(self):
-        return np.sqrt(np.log(self.number_visits) / self.child_number_visits)
-
-    def value(self):
-        return self.child_Q()  + 1.5 * self.child_U()
-
-    def best_child(self, root_color):
-        # if self.depth == 100:
-        #     return None
-
-        best_index = self.value()
-        # best_index[self.child_move_index:] = -20000
-        if not np.any(best_index):
-            return None
-        best_index = np.argmax(best_index)
-        # best_index = np.argmax(best_index)
-        best = self.children[best_index]
-
-        return best
 
     def select_leaf(self, root_color):
         current = self
-        while current.is_expanded:
-            best = current.best_child(root_color)
-            if best:
-                current = best
-            else:
-                break
-        return current
 
-    def expand(self):
+        while not current.is_expanded and current.depth < 4:
+            best = current.expand(root_color)
+            if type(best) == DummyNode:
+                return current
+            # best = current.children[current.child_move_index]
+
+            if best.depth == 4:
+                value = eval(best.board, root_color)
+                best.total_value = value
+                best.parent.alpha = max(best.parent.alpha, value)
+
+                if best.parent.alpha >= best.parent.beta:
+                    # print("pruning")
+                    best.parent.is_expanded = True
+                    best.parent.child_total_value = best.parent.child_total_value[:best.parent.child_move_index]
+                    best.parent.child_number_visits = best.parent.child_number_visits[:best.parent.child_move_index]
+                    best.parent.children = best.parent.children[:best.parent.child_move_index]
+                    best.parent.backup(root_color)
+                    return best.parent
+
+            current = best
+
+        return current.parent
+
+    def expand(self, root_color):
         try:
             move = next(self.legal_moves)
             copy_board = self.board.copy(stack=False)
             copy_board.push(move)
-            self.children[self.child_move_index] = UCTNode(copy_board, move, self.child_move_index,parent=self, depth=self.depth + 1)
+            self.children.append(UCTNode(copy_board, move, self.child_move_index,parent=self, depth=self.depth + 1, alpha=self.alpha, beta=self.beta))
             self.child_move_index += 1
-            return self.children[self.child_move_index - 1]
+            return self.children[-1]
         except StopIteration:
             self.is_expanded = True
-            self.parent.child_expanded[self.move_index] = 1
             self.child_total_value = self.child_total_value[:self.child_move_index]
             self.child_number_visits = self.child_number_visits[:self.child_move_index]
-            self.child_expanded = self.child_expanded[:self.child_move_index]
             self.children = self.children[:self.child_move_index]
-            return self
+            self.backup(root_color)
+            return self.parent
     def backup(self, root_color):
-        global MX
+        # self.total_value = eval(self.board, root_color)
+        # self.number_visits += 1
 
-        if self.depth == MX+1:
-            MX+=1
-        if self.number_visits == 0.000001:
-            self.number_visits = 1
-            value = eval(self.board, root_color)
-            self.total_value = value
-        else:
-            self.number_visits += 1
-
-        current = self.parent
-        while current.parent is not None:
-            current.number_visits += 1
-
+        current = self
+        # while current.parent is not None:
+        current.number_visits += 1
+        if current.is_expanded:
             if current.board.turn == root_color:
-                current.total_value = np.sum(self.child_total_value)
+                if self.child_move_index == 0:
+                    current.total_value = -10000
+                else:
+                    current.total_value = np.max(current.child_total_value)
             else:
-                current.total_value = -np.sum(self.child_total_value)
-
-            current = current.parent
+                if self.child_move_index == 0:
+                    current.total_value = 10000
+                else:
+                    current.total_value = np.min(current.child_total_value)
+            current.parent.beta = min(current.parent.beta, current.total_value)
+                # current = current.parent
+            # else:
+            #     break
+    def __str__(self):
+        return str(self.depth)
 
 
 class DummyNode(object):
     def __init__(self):
         self.parent = None
-
         self.child_total_value = np.zeros([1], dtype=np.float32)
         self.child_number_visits = np.repeat(0.000001, 1)
-        self.child_expanded = np.zeros([1], dtype=np.byte)
+        self.alpha = float('-inf')
+        self.beta = float('inf')
 
 
 def UCT_search(game_state, num_reads):
     root = UCTNode(game_state,move_index=0 ,move=None, parent=DummyNode())
-    for i in range(num_reads):
-        leaf = root.select_leaf(root.board.turn)
-
+    # for i in range(num_reads):
+    leaf = root
+    while True:
+        leaf = leaf.select_leaf(root.board.turn)
         if leaf.board.is_checkmate():
             if leaf.board.turn == root.board.turn:
                 leaf.total_value = -10000
             else:
                 leaf.total_value = 10000
-
-        leaf = leaf.expand()
-        leaf.backup(root_color=root.board.turn)
+        if leaf.depth == 0:
+            break
     # while True:
-    #     print(np.array([(x,y,z) for x,y,z in zip(root.child_total_value, np.array([str(chess.Move(*c.move)) for c in root.children]), root.child_number_visits)]))
-    #     most_visited_index = np.argmax(root.child_number_visits)
+    #     print(np.array([(x, y, z,v,b) for x, y, z,v,b in zip(root.child_total_value, np.array(
+    #         [str(chess.Move(*c.move)) if c else None for c in root.children]), root.child_number_visits, [x.beta for x in root.children], [x.alpha for x in root.children])]))
+    #     most_visited_index = np.argmax(root.child_total_value)
     #     print(chess.Move(*root.children[most_visited_index].move), most_visited_index)
     #     print("=====================================")
     #     root = root.children[most_visited_index]
 
-    return root.get_most_visited()
+        # leaf = leaf.expand()
+        # if leaf.depth == 3:
+        #     leaf.backup(root_color=root.board.turn)
+
+    return root.get_highest_value()
 
 
 PAWN = 100
@@ -244,8 +241,8 @@ def eval(board: chess.Board, root_color):
     white_eval = 0
     black_eval = 0
     is_endgame = False
-    xd = []
-    kk = []
+    # xd = []
+    # kk = []
     board_hash = zobrist_hash(board)
     if board_hash in trans:
         white_eval, black_eval = trans[board_hash]
@@ -256,7 +253,8 @@ def eval(board: chess.Board, root_color):
             is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.WHITE]) <= 1
         elif board.queens & board.occupied_co[chess.BLACK] == 0 and board.queens & board.occupied_co[chess.WHITE] != 0:
             is_endgame = count_ones((board.knights | board.bishops | board.rooks) & board.occupied_co[chess.BLACK]) <= 1
-
+        # xd = []
+        # kk = []
         for figure, weight, table in zip(
                 [board.white_pawns, board.white_knights, board.white_bishops, board.white_rooks, board.white_queens, board.white_kings],
                 [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
@@ -265,13 +263,13 @@ def eval(board: chess.Board, root_color):
                  KING_TABLE if not is_endgame else KING_TABLE_END]):
 
             white_eval += count_ones(figure) * weight
-            xd.append(count_ones(figure) * weight)
+            # xd.append(count_ones(figure) * weight)
             if figure:
                 white_eval += sum(table[i] for i in range(64) if figure & (1 << i))
-                kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
-        pass
-        xd = []
-        kk = []
+                # kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
+        # pass
+        # xd =[]
+        # kk = []
         for figure, weight, table in zip(
                 [board.black_pawns, board.black_knights, board.black_bishops, board.black_rooks, board.black_queens, board.black_kings],
                 [PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING],
@@ -280,10 +278,10 @@ def eval(board: chess.Board, root_color):
                  KING_TABLE_BLACK if not is_endgame else KING_TABLE_END_BLACK]):
 
             black_eval += count_ones(figure) * weight
-            xd.append(count_ones(figure) * weight)
+            # xd.append(count_ones(figure) * weight)
             if figure:
                 black_eval += sum(table[i] for i in range(64) if figure & (1 << i))
-                kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
+                # kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
 
         trans[board_hash] = [white_eval, black_eval]
 
@@ -321,10 +319,8 @@ def print_byte(byte):
 def MCTS_self_play(num_games):
     for idxx in range(0, num_games):
         current_board = chess.Board("r1bqkbnr/pp1ppppp/2n5/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 0 1")
-        # print(eval(current_board, True))
-        # exit()
         states = []
-        while current_board.fullmove_number <= 100:
+        while current_board.fullmove_number <= 200:
             draw_counter = 0
             for s in states:
                 if np.array_equal(current_board.board_fen(), s):
@@ -333,12 +329,15 @@ def MCTS_self_play(num_games):
                 break
             states.append(copy.deepcopy(current_board.board_fen()))
             t = time.time()
-            best_move = UCT_search(current_board, 25000)
+            best_move = UCT_search(current_board, 4000000)
             print("time: ", time.time() - t)
             current_board.push(best_move)
             global trans
             trans = {}
             print(current_board, eval(current_board, not current_board.turn), best_move, chess.Move(*best_move))
+            # move = input("Enter move: ")
+            # move = chess.Move.from_uci(move)
+            # current_board.push((move.from_square, move.to_square, move.promotion, move.drop))
 
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins
