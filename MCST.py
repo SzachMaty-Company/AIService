@@ -6,8 +6,6 @@ from chess.polyglot import zobrist_hash
 import chess_board as chess
 import numpy as np
 
-np.seterr(divide='ignore')
-MX = 0
 trans = {}
 class UCTNode:
     def __init__(self, board, move, move_index,parent=None, depth=0, alpha=float('-inf'), beta=float('inf')):
@@ -39,15 +37,15 @@ class UCTNode:
         return self.children[most_visited_index].move
 
 
-    def select_leaf(self, root_color):
+    def select_leaf(self, root_color, max_depth):
         current = self
 
-        while not current.is_expanded and current.depth < 4:
+        while not current.is_expanded and current.depth < max_depth:
             best = current.expand(root_color)
             if type(best) == DummyNode:
                 return current
 
-            if best.depth == 4:
+            if best.depth == max_depth:
                 value = eval(best.board, root_color)
                 best.total_value = value
                 best.parent.alpha = max(best.parent.alpha, value)
@@ -83,12 +81,18 @@ class UCTNode:
         if current.is_expanded:
             if current.board.turn == root_color:
                 if self.child_move_index == 0:
-                    current.total_value = -10000
+                    if current.board.is_checkmate():
+                        current.total_value = -10000
+                    else:
+                        current.total_value = 0
                 else:
                     current.total_value = np.max(current.child_total_value)
             else:
                 if self.child_move_index == 0:
-                    current.total_value = 10000
+                    if current.board.is_checkmate():
+                        current.total_value = 10000
+                    else:
+                        current.total_value = 0
                 else:
                     current.total_value = np.min(current.child_total_value)
             current.parent.beta = min(current.parent.beta, current.total_value)
@@ -96,29 +100,51 @@ class UCTNode:
             # else:
             #     break
     def __str__(self):
-        return str(self.depth)
+        return str(self.move)
 
 
 class DummyNode(object):
     def __init__(self):
         self.parent = None
+        self.depth = 0
         self.child_total_value = np.zeros([1], dtype=np.float32)
         self.alpha = float('-inf')
         self.beta = float('inf')
 
 
-def UCT_search(game_state):
+def UCT_search(game_state, new):
     root = UCTNode(game_state,move_index=0 ,move=None, parent=DummyNode())
     leaf = root
-    while True:
-        leaf = leaf.select_leaf(root.board.turn)
-        if leaf.board.is_checkmate():
-            if leaf.board.turn == root.board.turn:
-                leaf.total_value = -10000
-            else:
-                leaf.total_value = 10000
-        if leaf.depth == 0:
-            break
+    start_time = time.time()
+    if new:
+        max_depth = 3
+        while True:
+            leaf = leaf.select_leaf(root.board.turn, max_depth=max_depth)
+            # if leaf.is_expanded and leaf.child_move_index == 0:
+            #     if leaf.board.turn == root.board.turn:
+            #         leaf.total_value = -10000
+            #     else:
+            #         leaf.total_value = 10000
+            # elif leaf.board.is_stalemate() or leaf.board.is_insufficient_material():
+            #     leaf.total_value = 0
+            if leaf.depth == 0:
+                if time.time() - start_time > 3:
+                    break
+                leaf = root
+                max_depth += 1
+    else:
+        while True:
+            leaf = leaf.select_leaf(root.board.turn, max_depth=5)
+            # if leaf.is_expanded and leaf.child_move_index == 0:
+            #     if leaf.board.turn == root.board.turn:
+            #         leaf.total_value = -10000
+            #     else:
+            #         leaf.total_value = 10000
+            # elif leaf.board.is_stalemate() or leaf.board.is_insufficient_material():
+            #     leaf.total_value = 0
+            if leaf.depth == 0:
+                break
+
     # while True:
     #     print(np.array([(x, y, z,v,b) for x, y, z,v,b in zip(root.child_total_value, np.array(
     #         [str(chess.Move(*c.move)) if c else None for c in root.children]), root.child_number_visits, [x.beta for x in root.children], [x.alpha for x in root.children])]))
@@ -126,7 +152,13 @@ def UCT_search(game_state):
     #     print(chess.Move(*root.children[most_visited_index].move), most_visited_index)
     #     print("=====================================")
     #     root = root.children[most_visited_index]
-
+    # count number of children starting from root recursively
+    def count_children(root):
+        if not root.children:
+            return 1
+        else:
+            return 1 + sum(count_children(child) for child in root.children)
+    print(count_children(root))
     return root.get_highest_value()
 
 
@@ -221,7 +253,7 @@ def eval(board: chess.Board, root_color):
     is_endgame = False
     # xd = []
     # kk = []
-    board_hash = zobrist_hash(board)
+    board_hash = None#zobrist_hash(board)
     if board_hash in trans:
         white_eval, black_eval = trans[board_hash]
     else:
@@ -245,6 +277,19 @@ def eval(board: chess.Board, root_color):
             if figure:
                 white_eval += sum(table[i] for i in range(64) if figure & (1 << i))
                 # kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
+        if is_endgame:
+            black_king = board.black_kings
+            black_king_square = None
+            for i in range(64):
+                if black_king & (1 << i):
+                    black_king_square = i
+                    break
+
+            black_king_distance_to_centre_file = max((3 - (black_king_square % 8), (black_king_square % 8) - 4))
+            black_king_distance_to_centre_rank = max((3 - (black_king_square // 8), (black_king_square // 8) - 4))
+
+            white_eval += 10 * (black_king_distance_to_centre_file + black_king_distance_to_centre_rank)
+
         # pass
         # xd =[]
         # kk = []
@@ -261,7 +306,29 @@ def eval(board: chess.Board, root_color):
                 black_eval += sum(table[i] for i in range(64) if figure & (1 << i))
                 # kk.append(sum(table[i] for i in range(64) if figure & (1 << i)))
 
-        trans[board_hash] = [white_eval, black_eval]
+        if is_endgame:
+            white_king = board.white_kings
+            white_king_square = None
+            for i in range(64):
+                if white_king & (1 << i):
+                    white_king_square = i
+                    break
+
+            white_king_distance_to_centre_file = max((3 - (white_king_square % 8), (white_king_square % 8) - 4))
+            white_king_distance_to_centre_rank = max((3 - (white_king_square // 8), (white_king_square // 8) - 4))
+
+            black_eval += 10 * (white_king_distance_to_centre_file + white_king_distance_to_centre_rank)
+
+        if is_endgame:
+            distance_between_kings_file = abs((white_king_square % 8) - (black_king_square % 8))
+            distance_between_kings_rank = abs((white_king_square // 8) - (black_king_square // 8))
+
+            if white_eval > black_eval:
+                white_eval += 10*(14 - (distance_between_kings_file + distance_between_kings_rank))
+            else:
+                black_eval += 10*(14 - (distance_between_kings_file + distance_between_kings_rank))
+
+        # trans[board_hash] = [white_eval, black_eval]
 
     return (white_eval - black_eval) if root_color else (black_eval - white_eval)
 
@@ -273,13 +340,6 @@ def count_ones(n):
         count += 1
     return count
 
-def sum_values_where_bytes_are_1(byte_variable, value_array):
-    byte_size = len(value_array)
-    sum_values = 0
-    for i in range(byte_size):
-        if byte_variable & (1 << i):
-            sum_values += value_array[i]
-    return sum_values
 def print_byte(byte):
     if type(byte) == list:
         for b in byte:
@@ -296,26 +356,29 @@ def print_byte(byte):
 
 def MCTS_self_play(num_games):
     for idxx in range(0, num_games):
-        current_board = chess.Board("r1bqkb1r/pp1ppppp/2n2n2/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
+        current_board = chess.Board("8/3KP3/8/8/8/8/7q/6k1 b - - 1 1")#r1bqkb1r/pp1ppppp/2n2n2/2p5/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 1")
         states = []
         while current_board.fullmove_number <= 200:
-            draw_counter = 0 # TODO save what captured during generation, and so sort the moves
+            draw_counter = 0
             for s in states:
                 if np.array_equal(current_board.board_fen(), s):
                     draw_counter += 1
             if draw_counter == 3:
+                print("Draw")
                 break
             states.append(copy.deepcopy(current_board.board_fen()))
             t = time.time()
-            best_move = UCT_search(current_board)
+            best_move = UCT_search(current_board, False)
             print("time: ", time.time() - t)
-            current_board.push(best_move, True)
+            current_board.push(best_move)
             global trans
             trans = {}
             print(current_board, eval(current_board, not current_board.turn), best_move, chess.Move(*best_move))
             # move = input("Enter move: ")
             # move = chess.Move.from_uci(move)
-            # current_board.push((move.from_square, move.to_square, move.promotion, move.drop))
+            # current_board.push((move.from_square, move.to_square, move.promotion, move.drop,
+            #                     current_board.piece_at(move.from_square).piece_type if current_board.piece_at(move.from_square) else None,
+            #                     current_board.piece_at(move.to_square).piece_type if current_board.piece_at(move.to_square) else None, None))
 
             if current_board.is_checkmate():
                 if current_board.turn:  # black wins
@@ -323,6 +386,9 @@ def MCTS_self_play(num_games):
                 else:  # white wins
                     print("White wins")
                 break
+            elif current_board.is_stalemate() or current_board.is_insufficient_material():
+                print("Draw")
+                break
 
 
-MCTS_self_play(50)
+MCTS_self_play(1)
