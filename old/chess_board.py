@@ -312,6 +312,11 @@ BB_RANKS = [
 
 BB_BACKRANKS = BB_RANK_1 | BB_RANK_8
 
+class ChessPiece:
+    piece_type: PieceType
+    color: Color
+    position: int
+
 
 def lsb(bb: Bitboard) -> int:
     return (bb & -bb).bit_length() - 1

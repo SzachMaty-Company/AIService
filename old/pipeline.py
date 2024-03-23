@@ -35,7 +35,7 @@ if __name__ == "__main__":
         # net_to_train = "current_net_trained8_iter1.pth.tar"
         # save_as = "current_net_trained8_iter1.pth.tar"
         # # gather data
-        data_path = "datasets/iter1/"
+        data_path = "../datasets/iter1/"
         datasets = []
         for idx, file in enumerate(os.listdir(data_path)):
             filename = os.path.join(data_path, file)
@@ -43,7 +43,7 @@ if __name__ == "__main__":
                 datasets.extend(pickle.load(fo, encoding="bytes"))
         print(datasets[0])
         exit()
-        data_path = "datasets/iter1/"
+        data_path = "../datasets/iter1/"
         for idx, file in enumerate(os.listdir(data_path)):
             filename = os.path.join(data_path, file)
             with open(filename, "rb+") as fo:
