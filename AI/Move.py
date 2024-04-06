@@ -78,4 +78,5 @@ class Move:
         return self.moveValue == 0
 
     def Name(self) -> str:
+        # TODO promojce
         return f"{SquareNameFromIndex(self.StartSquare())}{SquareNameFromIndex(self.TargetSquare())}"

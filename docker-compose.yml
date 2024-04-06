@@ -1,0 +1,10 @@
+version: "3.7"
+
+services:
+  python-container:
+    container_name: minimal-python
+    build:
+      context: ./AI
+      dockerfile: Dockerfile
+    expose:
+      - "8888"

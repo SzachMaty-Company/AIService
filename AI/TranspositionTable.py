@@ -1,6 +1,5 @@
 from Board import Board
 from Move import Move
-from pympler import asizeof
 
 
 class TranspositionTable:
@@ -19,9 +18,6 @@ class TranspositionTable:
             self.depth = depth  # depth is how many ply were searched ahead from this position
             self.nodeType = nodeType
             self.move = move
-
-        def GetSize(self) -> int:
-            return asizeof.asizeof(self)
 
     lookupFailed = -999999
 

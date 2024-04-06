@@ -1,6 +1,5 @@
 import os
 import random
-import struct
 from const import *
 
 random.seed(2137420)

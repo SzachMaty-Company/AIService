@@ -1,5 +1,3 @@
-import numpy as np
-
 from Move import Move
 from Piece import Piece
 from PieceList import PieceList
