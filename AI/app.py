@@ -26,7 +26,6 @@ settings.only_square = False
 
 @app.route("/", methods=['POST'])
 def hello():
-    return "", 200
     data = request.get_json()
     fen = data.get('fen')
 
